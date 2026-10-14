@@ -17,6 +17,9 @@ dist-ssr
 .planner-test
 *.lnk
 
+# Personal life history — keep local / Firebase only (do not publish)
+src/data/AUTOBIOGRAPHY.md
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

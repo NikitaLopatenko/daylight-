@@ -1,10 +1,10 @@
+mod input_macro;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
-use tauri_plugin_autostart::ManagerExt;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -14,11 +14,21 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            input_macro::get_cursor_position,
+            input_macro::move_cursor,
+            input_macro::click_at,
+            input_macro::send_hotkey,
+            input_macro::clipboard_write,
+            input_macro::clipboard_read,
+            input_macro::sleep_ms,
+        ])
         .setup(|app| {
             // Register Daylight for Windows startup so it opens after login.
             // Only for packaged/release builds (not `tauri dev`).
             #[cfg(not(debug_assertions))]
             {
+                use tauri_plugin_autostart::ManagerExt;
                 let launcher = app.autolaunch();
                 if launcher.is_enabled().unwrap_or(false) == false {
                     let _ = launcher.enable();

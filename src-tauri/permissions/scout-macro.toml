@@ -1,0 +1,12 @@
+[[permission]]
+identifier = "allow-scout-macro"
+description = "Machine-local mouse/keyboard macro for Gemini scout"
+commands.allow = [
+  "get_cursor_position",
+  "move_cursor",
+  "click_at",
+  "send_hotkey",
+  "clipboard_write",
+  "clipboard_read",
+  "sleep_ms"
+]

@@ -9,6 +9,7 @@
     "autostart:allow-disable",
     "autostart:allow-enable",
     "autostart:allow-is-enabled",
-    "opener:default"
+    "opener:default",
+    "allow-scout-macro"
   ]
 }

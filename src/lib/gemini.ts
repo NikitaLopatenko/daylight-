@@ -1,3 +1,4 @@
+import { lifeStoryForPrompt } from "../data/lifeStory";
 import { loadChatsBetween, loadGoals, loadProfile, type Goal, type StoredChatMessage } from "./firebase";
 
 export function isGeminiConfigured() {
@@ -39,7 +40,11 @@ function describeGoals(goals: Goal[]) {
   return active.map((goal) => {
     const steps = goal.subSteps.length ? ` Steps: ${goal.subSteps.join("; ")}.` : "";
     const deadline = goal.deadline ? ` Deadline: ${goal.deadline}.` : "";
-    return `- ${goal.title} (${goal.status}).${deadline}${steps}`;
+    const domain = goal.domain ? ` Domain: ${goal.domain}.` : "";
+    const watches = goal.watchQueries?.length ? ` Watch: ${goal.watchQueries.join("; ")}.` : "";
+    const people = goal.people?.length ? ` People/labs: ${goal.people.join("; ")}.` : "";
+    const notes = goal.notes ? ` Notes: ${goal.notes}.` : "";
+    return `- ${goal.title} (${goal.status}).${domain}${deadline}${steps}${watches}${people}${notes}`;
   }).join("\n");
 }
 
@@ -52,7 +57,9 @@ export async function askPlanner(input: {
   const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (!apiKey) throw new Error("Gemini is not configured.");
 
-  const profile = input.userId ? await loadProfile(input.userId) : { memorySummary: "" };
+  const profile = input.userId
+    ? await loadProfile(input.userId)
+    : { memorySummary: "", lifeStory: "" };
   const goals = input.userId ? await loadGoals(input.userId) : [];
   const range = input.userId ? detectDateRange(input.message, input.today) : null;
   const pastChats = input.userId && range
@@ -61,15 +68,22 @@ export async function askPlanner(input: {
   const pastText = pastChats.length
     ? pastChats.map((chat) => `${chat.date}\n${chat.messages.map((message) => `${message.role}: ${message.content}`).join("\n")}`).join("\n\n")
     : "No saved chats were requested for a past date range.";
+  const lifeStory = lifeStoryForPrompt(profile.lifeStory);
 
   const system = [
     "You are Daylight, an AI life planner for one person.",
-    "Use the profile and goals below when you give advice. Keep plans realistic around classes, meals, energy, and travel.",
+    "Use the life story, profile memory, and goals below when you give advice.",
+    "Prefer real past relationships and open loops from the life story when suggesting outreach or opportunities.",
+    "Do not invent faculty promises, publications, or acceptances that are not in the life story.",
+    "Keep plans realistic around classes, meals, energy, and travel.",
     "If they ask what they did on a past date, use only the saved chat logs. Do not invent completed tasks.",
     "When they set a long-term goal, restate the goal, a deadline if they gave one, and 3 to 5 concrete sub-steps.",
     "",
     `Today is ${input.today}.`,
     `Profile memory: ${profile.memorySummary || "No long-term memory summary yet."}`,
+    "Life story / relationship map:",
+    lifeStory || "No life story synced yet.",
+    "",
     "Active goals:",
     describeGoals(goals),
     "",

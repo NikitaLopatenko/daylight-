@@ -35,23 +35,79 @@ import {
   type Journal,
 } from "./journal";
 import { SleepTimeline } from "./SleepTimeline";
+import { askPlanner, isGeminiConfigured } from "./lib/gemini";
+import {
+  buildGeminiNewsPrompt,
+  goalScoutTargets,
+  importGeminiBriefing,
+  launchGeminiNewsScout,
+  readBriefing,
+  runMorningScout,
+  splitList,
+  type MorningBriefing,
+} from "./lib/scout";
+import {
+  capturePointAfterCountdown,
+  macroIsReady,
+  readScoutMacroConfig,
+  runGeminiScreenMacro,
+  writeScoutMacroConfig,
+  type ScoutMacroConfig,
+} from "./lib/scoutMacro";
+import {
+  editablePlanFrom,
+  parseDeepResearchPlan,
+  researchHowToGetThere,
+  startGeminiAppDeepResearch,
+  type GoalResearchPlan,
+} from "./lib/goalResearch";
+import { getBundledLifeStory, lifeStoryLoaded } from "./data/lifeStory";
 import {
   addGoal,
   ensureUser,
   isFirebaseConfigured,
   loadGoals,
   loadProfile,
+  migrateLegacyUserToOwner,
   recordHabitDate,
   removeGoal,
   saveChatDay,
+  saveLifeStory,
   saveMemorySummary,
+  saveScoutPrompt,
   setGoalStatus,
+  updateGoal,
   type Goal,
   type StoredChatMessage,
 } from "./lib/firebase";
-import { askPlanner, isGeminiConfigured } from "./lib/gemini";
+import {
+  loadPlannerState,
+  plannerStateIsEmpty,
+  savePlannerState,
+  type PlannerCloudState,
+} from "./lib/plannerSync";
+import { readSyncKey, writeSyncKey } from "./lib/syncKey";
 import { startVoiceInput, type VoiceSession } from "./speech";
+import { VoiceMic } from "./VoiceMic";
 import "./App.css";
+
+type VoiceTarget =
+  | "assistant"
+  | "memory"
+  | "goalTitle"
+  | "goalSteps"
+  | "goalWatch"
+  | "goalPeople"
+  | "goalNotes"
+  | "newTask"
+  | "newHabit"
+  | "newBirthday"
+  | "newPlaceName"
+  | "newPlaceAddress"
+  | "customAddress"
+  | "geminiImport";
+
+type TaskPriority = "red" | "yellow" | "green";
 
 type Task = {
   id: number;
@@ -59,9 +115,29 @@ type Task = {
   context: "Home" | "Campus" | "Anywhere";
   points: number;
   done: boolean;
+  /** red = do first, yellow = soon, green = can wait */
+  priority: TaskPriority;
   address?: string;
   placeId?: number;
 };
+
+const PRIORITY_RANK: Record<TaskPriority, number> = { red: 0, yellow: 1, green: 2 };
+
+function normalizeTask(task: Task): Task {
+  const priority = task.priority === "red" || task.priority === "green" || task.priority === "yellow"
+    ? task.priority
+    : "yellow";
+  return { ...task, priority };
+}
+
+function sortTasksByPriority(list: Task[]) {
+  return [...list].sort((first, second) => {
+    if (first.done !== second.done) return first.done ? 1 : -1;
+    const rank = PRIORITY_RANK[first.priority] - PRIORITY_RANK[second.priority];
+    if (rank !== 0) return rank;
+    return first.id - second.id;
+  });
+}
 
 type Habit = {
   id: number;
@@ -77,10 +153,10 @@ type Birthday = {
 };
 
 const initialTasks: Task[] = [
-  { id: 1, title: "Review calculus notes", context: "Campus", points: 15, done: true },
-  { id: 2, title: "Email Professor Miller", context: "Anywhere", points: 10, done: false },
-  { id: 3, title: "Work on portfolio project", context: "Home", points: 25, done: false },
-  { id: 4, title: "Pick up groceries", context: "Campus", points: 10, done: false },
+  { id: 1, title: "Review calculus notes", context: "Campus", points: 15, done: true, priority: "yellow" },
+  { id: 2, title: "Email Professor Miller", context: "Anywhere", points: 10, done: false, priority: "red" },
+  { id: 3, title: "Work on portfolio project", context: "Home", points: 25, done: false, priority: "yellow" },
+  { id: 4, title: "Pick up groceries", context: "Campus", points: 10, done: false, priority: "green" },
 ];
 
 const initialHabits: Habit[] = [
@@ -160,7 +236,11 @@ function readPlaceSettings(): PlaceSettings {
 }
 
 function App() {
-  const [tasks, setTasks] = useState<Task[]>(() => readStored("daylight-tasks", initialTasks));
+  const [tasks, setTasks] = useState<Task[]>(() => {
+    const stored = readStored("daylight-tasks", initialTasks);
+    return sortTasksByPriority(stored.map((task) => normalizeTask(task as Task)));
+  });
+  const [newTaskPriority, setNewTaskPriority] = useState<TaskPriority>("yellow");
   const [habits, setHabits] = useState<Habit[]>(() => readStored("daylight-habits", initialHabits));
   const [schedule, setSchedule] = useState<ScheduleEvent[]>(() => readStored("daylight-schedule-v2", initialSchedule));
   const [birthdays, setBirthdays] = useState<Birthday[]>(() => readStored("daylight-birthdays", initialBirthdays));
@@ -173,6 +253,11 @@ function App() {
   const [newHabit, setNewHabit] = useState("");
   const [newBirthday, setNewBirthday] = useState("");
   const [birthdayDate, setBirthdayDate] = useState("");
+  const [birthdayMonth, setBirthdayMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+  const [selectedBirthdayDay, setSelectedBirthdayDay] = useState<string | null>(null);
   const [newPlaceName, setNewPlaceName] = useState("");
   const [newPlaceAddress, setNewPlaceAddress] = useState("");
   const [newPlaceRole, setNewPlaceRole] = useState<PlaceRole>("Other");
@@ -185,6 +270,7 @@ function App() {
   const [suggestionVisible, setSuggestionVisible] = useState(true);
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState("");
+  const [voiceTarget, setVoiceTarget] = useState<VoiceTarget | null>(null);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
   const [journal, setJournal] = useState<Journal>(() => readJournal());
@@ -194,14 +280,56 @@ function App() {
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [cloudUserId, setCloudUserId] = useState<string | null>(null);
   const [cloudStatus, setCloudStatus] = useState(isFirebaseConfigured() ? "Connecting…" : "Local only");
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncKeyDraft, setSyncKeyDraft] = useState(() => {
+    try { return readSyncKey(); } catch { return ""; }
+  });
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState("");
   const [goals, setGoals] = useState<Goal[]>([]);
   const [memorySummary, setMemorySummary] = useState("");
+  const [lifeStory, setLifeStory] = useState("");
+  const [memorySaveStatus, setMemorySaveStatus] = useState("");
+  const [lifeStoryStatus, setLifeStoryStatus] = useState("");
   const [goalTitle, setGoalTitle] = useState("");
   const [goalDeadline, setGoalDeadline] = useState("");
   const [goalSteps, setGoalSteps] = useState("");
+  const [goalDomain, setGoalDomain] = useState("research");
+  const [goalWatchQueries, setGoalWatchQueries] = useState("");
+  const [goalPeople, setGoalPeople] = useState("");
+  const [goalNotes, setGoalNotes] = useState("");
+  const [researchingGoalId, setResearchingGoalId] = useState<string | null>(null);
+  const [researchError, setResearchError] = useState("");
+  const [researchDraft, setResearchDraft] = useState<GoalResearchPlan | null>(null);
+  const [researchSaving, setResearchSaving] = useState(false);
+  const [researchImportOpen, setResearchImportOpen] = useState(false);
+  const [researchImportText, setResearchImportText] = useState("");
+  const [researchImportGoal, setResearchImportGoal] = useState<Goal | null>(null);
+  const [briefing, setBriefing] = useState<MorningBriefing | null>(() => readBriefing(plannerDayKey(new Date())));
+  const [scoutStatus, setScoutStatus] = useState<"idle" | "running" | "error">("idle");
+  const [scoutMessage, setScoutMessage] = useState("");
+  const [scoutPrompt, setScoutPrompt] = useState("");
+  const [geminiImportText, setGeminiImportText] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
+  const [macroConfig, setMacroConfig] = useState<ScoutMacroConfig>(() => readScoutMacroConfig());
+  const [macroOpen, setMacroOpen] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState("");
+  const scoutSyncedFor = useRef<string>("");
   const voiceSession = useRef<VoiceSession | null>(null);
   const habitsRef = useRef(habits);
+  const plannerHydrated = useRef(false);
+  const plannerSaveTimer = useRef<number | null>(null);
+  const plannerSnapshot = useRef({
+    tasks,
+    habits,
+    schedule,
+    birthdays,
+    places,
+    journal,
+  });
   const voiceInputPrefix = useRef("");
+  const lastVoiceTarget = useRef<VoiceTarget>("assistant");
+  const voiceSessionId = useRef(0);
   const [assistantInput, setAssistantInput] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -241,21 +369,122 @@ function App() {
   }, []);
 
   useEffect(() => {
+    plannerSnapshot.current = { tasks, habits, schedule, birthdays, places, journal };
+  }, [tasks, habits, schedule, birthdays, places, journal]);
+
+  async function connectCloudVault(legacyUserId?: string | null) {
+    const ownerId = readSyncKey();
+    setSyncKeyDraft(ownerId);
+    setCloudUserId(ownerId);
+    plannerHydrated.current = false;
+
+    if (legacyUserId) {
+      try {
+        const migrated = await migrateLegacyUserToOwner(legacyUserId, ownerId);
+        if (migrated) setSyncMessage("Moved earlier goals/memory into your shared vault.");
+      } catch {
+        // Legacy path may be blocked by rules — fine.
+      }
+    }
+
+    const [profile, storedGoals, planner] = await Promise.all([
+      loadProfile(ownerId),
+      loadGoals(ownerId),
+      loadPlannerState(ownerId),
+    ]);
+    setMemorySummary(profile.memorySummary);
+    const cloudStory = profile.lifeStory?.trim() || "";
+    const bundled = getBundledLifeStory();
+    if (cloudStory) {
+      setLifeStory(cloudStory);
+      setLifeStoryStatus("Life story loaded from Firebase.");
+    } else if (bundled) {
+      setLifeStory(bundled);
+      await saveLifeStory(ownerId, bundled);
+      setLifeStoryStatus("Autobiography imported from local file and saved to Firebase.");
+    } else {
+      setLifeStory("");
+      setLifeStoryStatus("No life story found yet.");
+    }
+    setGoals(storedGoals);
+    await hydratePlannerFromCloud(ownerId, planner);
+    setCloudStatus(`Cloud connected · vault “${ownerId}”`);
+  }
+
+  async function hydratePlannerFromCloud(userId: string, planner: PlannerCloudState | null) {
+    const local = {
+      tasks: plannerSnapshot.current.tasks,
+      habits: plannerSnapshot.current.habits,
+      schedule: plannerSnapshot.current.schedule,
+      birthdays: plannerSnapshot.current.birthdays,
+      places: plannerSnapshot.current.places,
+      journal: readJournal(),
+      lastPlannerDay: readLastPlannerDay(),
+    };
+
+    if (plannerStateIsEmpty(planner)) {
+      await savePlannerState(userId, local);
+      setSyncMessage("Uploaded local todos, habits, and schedule to Firebase.");
+    } else if (planner) {
+      applyPlannerFromCloud(planner);
+      setSyncMessage(`Loaded cloud planner (updated ${new Date(planner.updatedAtMs || Date.now()).toLocaleString()}).`);
+    }
+    plannerHydrated.current = true;
+  }
+
+  function applyPlannerFromCloud(planner: PlannerCloudState) {
+    const nextTasks = sortTasksByPriority(
+      (planner.tasks as Task[]).map((task) => normalizeTask(task)),
+    );
+    const nextHabits = (planner.habits as Habit[]) ?? [];
+    const nextSchedule = (planner.schedule as ScheduleEvent[]) ?? [];
+    const nextBirthdays = (planner.birthdays as Birthday[]) ?? [];
+    const nextPlaces = (planner.places as PlaceSettings) ?? initialPlaces;
+    const nextJournal = planner.journal ?? {};
+
+    setTasks(nextTasks);
+    setHabits(nextHabits);
+    setSchedule(nextSchedule);
+    setBirthdays(nextBirthdays);
+    setPlaces(nextPlaces);
+    setJournal(nextJournal);
+    localStorage.setItem("daylight-tasks", JSON.stringify(nextTasks));
+    localStorage.setItem("daylight-habits", JSON.stringify(nextHabits));
+    localStorage.setItem("daylight-schedule-v2", JSON.stringify(nextSchedule));
+    localStorage.setItem("daylight-birthdays", JSON.stringify(nextBirthdays));
+    localStorage.setItem("daylight-places", JSON.stringify(nextPlaces));
+    writeJournal(nextJournal);
+    if (planner.lastPlannerDay) writeLastPlannerDay(planner.lastPlannerDay);
+  }
+
+  function queuePlannerSync() {
+    if (!cloudUserId || !plannerHydrated.current) return;
+    if (plannerSaveTimer.current) window.clearTimeout(plannerSaveTimer.current);
+    plannerSaveTimer.current = window.setTimeout(() => {
+      const snap = plannerSnapshot.current;
+      void savePlannerState(cloudUserId, {
+        tasks: snap.tasks,
+        habits: snap.habits,
+        schedule: snap.schedule,
+        birthdays: snap.birthdays,
+        places: snap.places,
+        journal: readJournal(),
+        lastPlannerDay: readLastPlannerDay(),
+      })
+        .then(() => setSyncMessage(`Synced ${new Date().toLocaleTimeString()}`))
+        .catch(() => setSyncMessage("Cloud sync failed — check Firestore rules."));
+    }, 700);
+  }
+
+  useEffect(() => {
     if (!isFirebaseConfigured()) return;
     ensureUser()
       .then(async (user) => {
         if (!user) {
-          setCloudStatus("Firebase config found, but sign-in failed.");
+          setCloudStatus("Firebase config found, but anonymous sign-in failed. Enable Anonymous in Authentication.");
           return;
         }
-        setCloudUserId(user.uid);
-        const [profile, storedGoals] = await Promise.all([
-          loadProfile(user.uid),
-          loadGoals(user.uid),
-        ]);
-        setMemorySummary(profile.memorySummary);
-        setGoals(storedGoals);
-        setCloudStatus("Cloud planner connected");
+        await connectCloudVault(user.uid);
       })
       .catch(() => setCloudStatus("Could not reach Firebase. Check Anonymous sign-in and your keys."));
   }, []);
@@ -263,6 +492,24 @@ function App() {
   const today = now;
   const planner = plannerDate(now);
   const dayKey = plannerDayKey(now);
+
+  useEffect(() => {
+    const existing = readBriefing(dayKey);
+    if (existing) setBriefing(existing);
+
+    const prompt = buildGeminiNewsPrompt(goals, dayKey, lifeStory);
+    setScoutPrompt(prompt);
+
+    const syncKey = `${dayKey}:${goals.map((goal) => goal.id).join(",")}:${prompt.length}:${lifeStory.length}`;
+    if (cloudUserId && goalScoutTargets(goals).length && scoutSyncedFor.current !== syncKey) {
+      scoutSyncedFor.current = syncKey;
+      void saveScoutPrompt(cloudUserId, prompt);
+    }
+
+    if (!existing && goalScoutTargets(goals).length) {
+      setScoutMessage("Prompt synced. Open in Gemini (Ctrl+V), then paste the JSON reply back here.");
+    }
+  }, [dayKey, goals, cloudUserId, lifeStory]);
   habitsRef.current = habits;
   const dateLabel = new Intl.DateTimeFormat("en-US", {
     weekday: "long",
@@ -301,29 +548,101 @@ function App() {
   }, [planner, dayKey]);
 
   function persistTasks(next: Task[]) {
-    setTasks(next);
-    localStorage.setItem("daylight-tasks", JSON.stringify(next));
+    const normalized = sortTasksByPriority(next.map(normalizeTask));
+    setTasks(normalized);
+    localStorage.setItem("daylight-tasks", JSON.stringify(normalized));
+    plannerSnapshot.current = { ...plannerSnapshot.current, tasks: normalized };
+    queuePlannerSync();
+  }
+
+  function setTaskPriority(id: number, priority: TaskPriority) {
+    persistTasks(tasks.map((task) => task.id === id ? { ...task, priority } : task));
   }
 
   function persistHabits(next: Habit[]) {
     setHabits(next);
     localStorage.setItem("daylight-habits", JSON.stringify(next));
+    plannerSnapshot.current = { ...plannerSnapshot.current, habits: next };
+    queuePlannerSync();
   }
 
   function persistSchedule(next: ScheduleEvent[]) {
     const sorted = [...next].sort((first, second) => first.time.localeCompare(second.time));
     setSchedule(sorted);
     localStorage.setItem("daylight-schedule-v2", JSON.stringify(sorted));
+    plannerSnapshot.current = { ...plannerSnapshot.current, schedule: sorted };
+    queuePlannerSync();
   }
 
   function persistBirthdays(next: Birthday[]) {
     setBirthdays(next);
     localStorage.setItem("daylight-birthdays", JSON.stringify(next));
+    plannerSnapshot.current = { ...plannerSnapshot.current, birthdays: next };
+    queuePlannerSync();
   }
 
   function persistPlaces(next: PlaceSettings) {
     setPlaces(next);
     localStorage.setItem("daylight-places", JSON.stringify(next));
+    plannerSnapshot.current = { ...plannerSnapshot.current, places: next };
+    queuePlannerSync();
+  }
+
+  function persistJournal(next: Journal) {
+    writeJournal(next);
+    setJournal(next);
+    plannerSnapshot.current = { ...plannerSnapshot.current, journal: next };
+    queuePlannerSync();
+  }
+
+  async function applySyncKey(event?: FormEvent) {
+    event?.preventDefault();
+    if (!syncKeyDraft.trim()) {
+      setAuthError("Enter any passphrase — same one on every device.");
+      return;
+    }
+    setAuthBusy(true);
+    setAuthError("");
+    try {
+      writeSyncKey(syncKeyDraft);
+      await connectCloudVault();
+      setSyncMessage("Vault key saved. This device now reads/writes that shared cloud folder.");
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : "Could not open vault. Publish firestore.rules for owners/{key}.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function forceUploadLocalPlanner() {
+    if (!cloudUserId) return;
+    setAuthBusy(true);
+    try {
+      const snap = plannerSnapshot.current;
+      await savePlannerState(cloudUserId, {
+        tasks: snap.tasks,
+        habits: snap.habits,
+        schedule: snap.schedule,
+        birthdays: snap.birthdays,
+        places: snap.places,
+        journal: readJournal(),
+        lastPlannerDay: readLastPlannerDay(),
+      });
+      setSyncMessage(`Forced upload ${new Date().toLocaleTimeString()}`);
+    } catch {
+      setSyncMessage("Upload failed — publish the owners/* Firestore rules.");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function copySyncKey() {
+    try {
+      await navigator.clipboard.writeText(readSyncKey());
+      setSyncMessage("Sync key copied — paste it on your iMac / iPhone.");
+    } catch {
+      setAuthError("Could not copy — select the key and copy manually.");
+    }
   }
 
   useEffect(() => {
@@ -333,11 +652,11 @@ function App() {
       const completed = currentHabits.filter((habit) => habit.done).map((habit) => habit.title);
       const next = readJournal();
       next[last] = { ...emptyDay(), ...next[last], habits: completed };
-      writeJournal(next);
-      setJournal(next);
+      persistJournal(next);
       persistHabits(currentHabits.map((habit) => ({ ...habit, done: false })));
     }
     writeLastPlannerDay(dayKey);
+    queuePlannerSync();
     if (!readJournal()[dayKey]?.sleepAsked) setSleepOpen(true);
   }, [dayKey]);
 
@@ -410,9 +729,10 @@ function App() {
     if (!title) return;
     persistTasks([
       ...tasks,
-      { id: Date.now(), title, context: "Anywhere", points: 10, done: false },
+      { id: Date.now(), title, context: "Anywhere", points: 10, done: false, priority: newTaskPriority },
     ]);
     setNewTask("");
+    setNewTaskPriority("yellow");
   }
 
   function toggleTask(id: number) {
@@ -424,13 +744,13 @@ function App() {
     const titles = done
       ? [...new Set([...log.tasks, task.title])]
       : log.tasks.filter((title) => title !== task.title);
-    setJournal(updateDay(dayKey, { tasks: titles }));
+    persistJournal(updateDay(dayKey, { tasks: titles }));
   }
 
   function toggleHabit(id: number) {
     const next = habits.map((habit) => habit.id === id ? { ...habit, done: !habit.done } : habit);
     persistHabits(next);
-    setJournal(updateDay(dayKey, {
+    persistJournal(updateDay(dayKey, {
       habits: next.filter((habit) => habit.done).map((habit) => habit.title),
     }));
     const habit = next.find((item) => item.id === id);
@@ -444,7 +764,7 @@ function App() {
     if (!sleepStart || !sleepEnd) return;
     const hours = sleepDurationHours(sleepStart, sleepEnd);
     if (hours <= 0 || hours > 24) return;
-    setJournal(updateDay(dayKey, {
+    persistJournal(updateDay(dayKey, {
       sleepStart,
       sleepEnd,
       sleepHours: hours,
@@ -454,7 +774,7 @@ function App() {
   }
 
   function skipSleep() {
-    setJournal(updateDay(dayKey, { sleepAsked: true }));
+    persistJournal(updateDay(dayKey, { sleepAsked: true }));
     setSleepOpen(false);
   }
 
@@ -466,14 +786,101 @@ function App() {
     setNewHabit("");
   }
 
+  function birthdayMonthDay(date: string) {
+    return date.slice(5);
+  }
+
+  function shiftBirthdayMonth(delta: number) {
+    const next = new Date(birthdayMonth.getFullYear(), birthdayMonth.getMonth() + delta, 1);
+    // Stay inside the current ongoing year only.
+    if (next.getFullYear() !== planner.getFullYear()) return;
+    setBirthdayMonth(next);
+  }
+
   function addBirthday(event: FormEvent) {
     event.preventDefault();
     const name = newBirthday.trim();
     if (!name || !birthdayDate) return;
-    persistBirthdays([...birthdays, { id: Date.now(), name, date: birthdayDate }]);
+    // Store against this year so the calendar reads like a normal year planner.
+    const monthDay = birthdayMonthDay(birthdayDate);
+    const storedDate = `${planner.getFullYear()}-${monthDay}`;
+    persistBirthdays([...birthdays, { id: Date.now(), name, date: storedDate }]);
     setNewBirthday("");
     setBirthdayDate("");
+    const month = Number(monthDay.slice(0, 2));
+    setBirthdayMonth(new Date(planner.getFullYear(), month - 1, 1));
+    setSelectedBirthdayDay(monthDay);
   }
+
+  function describeBirthdayDistance(monthDay: string) {
+    const target = new Date(`${planner.getFullYear()}-${monthDay}T12:00:00`);
+    const start = new Date(planner.getFullYear(), planner.getMonth(), planner.getDate(), 12);
+    const days = Math.round((target.getTime() - start.getTime()) / 86_400_000);
+    if (days < 0) return "Earlier this year";
+    if (days === 0) return "Today";
+    if (days === 1) return "Tomorrow";
+    if (days <= 7) return `In ${days} days · this week`;
+    if (days <= 14) return `In ${days} days · next weekish`;
+    return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "long", day: "numeric" }).format(target);
+  }
+
+  const birthdayCalendar = useMemo(() => {
+    const year = planner.getFullYear();
+    const month = birthdayMonth.getMonth();
+    const view = new Date(year, month, 1);
+    const firstWeekday = view.getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const todayKey = `${String(planner.getMonth() + 1).padStart(2, "0")}-${String(planner.getDate()).padStart(2, "0")}`;
+    const weekStart = new Date(planner.getFullYear(), planner.getMonth(), planner.getDate() - planner.getDay(), 12);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 6);
+
+    const cells: Array<{
+      key: string;
+      day: number | null;
+      monthDay: string | null;
+      people: Birthday[];
+      isToday: boolean;
+      isThisWeek: boolean;
+    }> = [];
+
+    for (let index = 0; index < firstWeekday; index += 1) {
+      cells.push({ key: `pad-${index}`, day: null, monthDay: null, people: [], isToday: false, isThisWeek: false });
+    }
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const monthDay = `${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      const absolute = new Date(year, month, day, 12);
+      cells.push({
+        key: monthDay,
+        day,
+        monthDay,
+        people: birthdays.filter((item) => birthdayMonthDay(item.date) === monthDay),
+        isToday: monthDay === todayKey && month === planner.getMonth(),
+        isThisWeek: absolute >= weekStart && absolute <= weekEnd,
+      });
+    }
+    return cells;
+  }, [birthdayMonth, birthdays, planner]);
+
+  const selectedDayPeople = selectedBirthdayDay
+    ? birthdays.filter((item) => birthdayMonthDay(item.date) === selectedBirthdayDay)
+    : [];
+
+  const upcomingBirthdays = useMemo(() => {
+    const year = planner.getFullYear();
+    const start = new Date(year, planner.getMonth(), planner.getDate(), 12);
+    return [...birthdays]
+      .map((item) => {
+        const monthDay = birthdayMonthDay(item.date);
+        const target = new Date(`${year}-${monthDay}T12:00:00`);
+        let distance = Math.round((target.getTime() - start.getTime()) / 86_400_000);
+        // If it already passed this year, show it after the later ones only at the end.
+        if (distance < 0) distance += 366;
+        return { ...item, monthDay, distance };
+      })
+      .sort((first, second) => first.distance - second.distance)
+      .slice(0, 6);
+  }, [birthdays, planner]);
 
   async function toggleAlwaysOnTop() {
     const next = !alwaysOnTop;
@@ -501,9 +908,7 @@ function App() {
     const text = assistantInput.trim();
     if (!text) return;
     if (voiceListening) {
-      voiceSession.current?.stop();
-      voiceSession.current = null;
-      setVoiceListening(false);
+      stopVoiceInput();
     }
 
     const result = processAssistantMessage(text);
@@ -526,6 +931,7 @@ function App() {
             ...item,
             id: now + 100 + index,
             done: false,
+            priority: "yellow" as TaskPriority,
           })),
       ]);
     }
@@ -584,55 +990,300 @@ function App() {
       title: goalTitle.trim(),
       status: "active",
       deadline: goalDeadline,
-      subSteps: goalSteps.split(",").map((step) => step.trim()).filter(Boolean),
+      subSteps: splitList(goalSteps),
+      domain: goalDomain,
+      watchQueries: splitList(goalWatchQueries),
+      people: splitList(goalPeople),
+      notes: goalNotes.trim(),
     });
     setGoals(await loadGoals(cloudUserId));
     setGoalTitle("");
     setGoalDeadline("");
     setGoalSteps("");
+    setGoalDomain("research");
+    setGoalWatchQueries("");
+    setGoalPeople("");
+    setGoalNotes("");
+  }
+
+  function persistMacro(next: ScoutMacroConfig) {
+    setMacroConfig(next);
+    writeScoutMacroConfig(next);
+  }
+
+  async function captureMacroPoint(key: keyof ScoutMacroConfig["points"]) {
+    setCaptureMessage(`Hover the ${key} spot — capturing in 3…`);
+    try {
+      const point = await capturePointAfterCountdown(3, (left) => {
+        setCaptureMessage(left > 0 ? `Hover the ${key} spot — capturing in ${left}…` : `Captured ${key}.`);
+      });
+      persistMacro({
+        ...macroConfig,
+        points: { ...macroConfig.points, [key]: point },
+      });
+      setCaptureMessage(`${key}: (${point.x}, ${point.y})`);
+    } catch (error) {
+      setCaptureMessage(error instanceof Error ? error.message : "Capture failed (run the desktop app, not the browser).");
+    }
+  }
+
+  async function openGeminiNewsFlow() {
+    const prompt = scoutPrompt || buildGeminiNewsPrompt(goals, dayKey, lifeStory);
+    setScoutPrompt(prompt);
+    if (cloudUserId) void saveScoutPrompt(cloudUserId, prompt);
+    setScoutStatus("running");
+
+    if (macroIsReady(macroConfig)) {
+      setScoutMessage(`Running screen macro… waiting ~${macroConfig.waitSeconds}s for Gemini, then copying the reply.`);
+      try {
+        const reply = await runGeminiScreenMacro(prompt, macroConfig);
+        const next = importGeminiBriefing(reply, dayKey);
+        setBriefing(next);
+        setScoutStatus("idle");
+        setScoutMessage(`Macro imported ${next.opportunities.length} signal${next.opportunities.length === 1 ? "" : "s"}.`);
+        setImportOpen(false);
+      } catch (error) {
+        setScoutStatus("error");
+        setScoutMessage(error instanceof Error ? error.message : "Screen macro failed.");
+        setImportOpen(true);
+      }
+      return;
+    }
+
+    setScoutMessage("Copied latest goal prompt. Opening Gemini — paste with Ctrl+V, then bring the JSON back. (Or calibrate the screen macro.)");
+    try {
+      await launchGeminiNewsScout(prompt);
+      setScoutStatus("idle");
+      setImportOpen(true);
+    } catch (error) {
+      setScoutStatus("error");
+      setScoutMessage(error instanceof Error ? error.message : "Could not open Gemini.");
+    }
+  }
+
+  function importGeminiReply(event: FormEvent) {
+    event.preventDefault();
+    if (!geminiImportText.trim()) return;
+    try {
+      const next = importGeminiBriefing(geminiImportText, dayKey);
+      setBriefing(next);
+      setGeminiImportText("");
+      setImportOpen(false);
+      setScoutStatus("idle");
+      setScoutMessage(`Imported ${next.opportunities.length} signal${next.opportunities.length === 1 ? "" : "s"} from Gemini.`);
+    } catch (error) {
+      setScoutStatus("error");
+      setScoutMessage(error instanceof Error ? error.message : "Could not parse Gemini JSON.");
+    }
+  }
+
+  async function runApiScoutFallback() {
+    if (scoutStatus === "running") return;
+    setScoutStatus("running");
+    setScoutMessage("Running API fallback scout…");
+    try {
+      const next = await runMorningScout(goals, dayKey, lifeStory);
+      setBriefing(next);
+      setScoutStatus("idle");
+      setScoutMessage(next.opportunities.length
+        ? `API scout found ${next.opportunities.length} signal${next.opportunities.length === 1 ? "" : "s"}.`
+        : "API scout finished — no strong signals.");
+    } catch (error) {
+      setScoutStatus("error");
+      setScoutMessage(error instanceof Error ? error.message : "Scout failed.");
+    }
   }
 
   async function saveMemory(event: FormEvent) {
     event.preventDefault();
-    if (!cloudUserId) return;
-    await saveMemorySummary(cloudUserId, memorySummary);
+    if (!cloudUserId) {
+      setMemorySaveStatus("Not connected to Firebase — memory was not saved.");
+      return;
+    }
+    try {
+      setMemorySaveStatus("Saving…");
+      await saveMemorySummary(cloudUserId, memorySummary);
+      setMemorySaveStatus(`Saved to Firebase · ${new Date().toLocaleTimeString()}`);
+    } catch (error) {
+      setMemorySaveStatus(error instanceof Error ? error.message : "Save failed.");
+    }
   }
 
-  function toggleVoiceInput() {
-    if (voiceListening) {
-      voiceSession.current?.stop();
-      voiceSession.current = null;
-      setVoiceListening(false);
+  async function runGoalResearch(goal: Goal) {
+    if (!isGeminiConfigured()) {
+      setResearchError("Add VITE_GEMINI_API_KEY to .env so the research agents can run — or use Deep research in Gemini Pro.");
+      return;
+    }
+    setResearchError("");
+    setResearchDraft(null);
+    setResearchImportOpen(false);
+    setResearchingGoalId(goal.id);
+    try {
+      const plan = await researchHowToGetThere(goal, memorySummary, lifeStory);
+      setResearchDraft(editablePlanFrom(plan));
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "Goal research failed.");
+    } finally {
+      setResearchingGoalId(null);
+    }
+  }
+
+  async function runDeepResearchInGemini(goal: Goal) {
+    setResearchError("");
+    setResearchDraft(null);
+    setResearchingGoalId(goal.id);
+    setResearchImportGoal(goal);
+    try {
+      const result = await startGeminiAppDeepResearch(goal, memorySummary, lifeStory);
+      if (result.mode === "done" && result.plan) {
+        setResearchDraft(editablePlanFrom(result.plan));
+        setResearchImportOpen(false);
+      } else {
+        setResearchImportOpen(true);
+        setResearchError("Deep research prompt copied + Gemini opened. Run Deep Research there, then paste the JSON reply below.");
+      }
+    } catch (error) {
+      setResearchImportOpen(true);
+      setResearchError(error instanceof Error ? error.message : "Could not launch Gemini deep research.");
+    } finally {
+      setResearchingGoalId(null);
+    }
+  }
+
+  function importDeepResearchReply(event: FormEvent) {
+    event.preventDefault();
+    if (!researchImportGoal || !researchImportText.trim()) return;
+    try {
+      const plan = parseDeepResearchPlan(researchImportText, researchImportGoal);
+      setResearchDraft(editablePlanFrom(plan));
+      setResearchImportText("");
+      setResearchImportOpen(false);
+      setResearchError("");
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "Could not parse deep research JSON.");
+    }
+  }
+
+  async function confirmGoalResearch() {
+    if (!cloudUserId || !researchDraft) return;
+    const draft = researchDraft;
+    setResearchSaving(true);
+    setResearchError("");
+    try {
+      await updateGoal(cloudUserId, draft.goalId, {
+        watchQueries: draft.proposedWatchQueries,
+        people: draft.proposedPeople,
+        notes: draft.proposedNotes,
+        subSteps: draft.proposedSubSteps,
+      });
+      const nextGoals = await loadGoals(cloudUserId);
+      setGoals(nextGoals);
+      const prompt = buildGeminiNewsPrompt(nextGoals, dayKey, lifeStory);
+      setScoutPrompt(prompt);
+      await saveScoutPrompt(cloudUserId, prompt);
+      setResearchDraft(null);
+      setScoutMessage(`Goal path saved. Scout prompt updated with ${draft.proposedWatchQueries.length} watch queries.`);
+    } catch (error) {
+      setResearchError(error instanceof Error ? error.message : "Could not save researched path.");
+    } finally {
+      setResearchSaving(false);
+    }
+  }
+
+  function stopVoiceInput() {
+    voiceSessionId.current += 1;
+    voiceSession.current?.stop();
+    voiceSession.current = null;
+    setVoiceListening(false);
+    setVoiceTarget(null);
+  }
+
+  function voiceFieldValue(target: VoiceTarget) {
+    switch (target) {
+      case "assistant": return assistantInput;
+      case "memory": return memorySummary;
+      case "goalTitle": return goalTitle;
+      case "goalSteps": return goalSteps;
+      case "goalWatch": return goalWatchQueries;
+      case "goalPeople": return goalPeople;
+      case "goalNotes": return goalNotes;
+      case "newTask": return newTask;
+      case "newHabit": return newHabit;
+      case "newBirthday": return newBirthday;
+      case "newPlaceName": return newPlaceName;
+      case "newPlaceAddress": return newPlaceAddress;
+      case "customAddress": return customAddress;
+      case "geminiImport": return geminiImportText;
+    }
+  }
+
+  function setVoiceFieldValue(target: VoiceTarget, value: string) {
+    switch (target) {
+      case "assistant": setAssistantInput(value); break;
+      case "memory": setMemorySummary(value); break;
+      case "goalTitle": setGoalTitle(value); break;
+      case "goalSteps": setGoalSteps(value); break;
+      case "goalWatch": setGoalWatchQueries(value); break;
+      case "goalPeople": setGoalPeople(value); break;
+      case "goalNotes": setGoalNotes(value); break;
+      case "newTask": setNewTask(value); break;
+      case "newHabit": setNewHabit(value); break;
+      case "newBirthday": setNewBirthday(value); break;
+      case "newPlaceName": setNewPlaceName(value); break;
+      case "newPlaceAddress": setNewPlaceAddress(value); break;
+      case "customAddress": setCustomAddress(value); break;
+      case "geminiImport": setGeminiImportText(value); break;
+    }
+  }
+
+  function rememberVoiceTarget(target: VoiceTarget) {
+    lastVoiceTarget.current = target;
+  }
+
+  function toggleVoiceFor(target: VoiceTarget = lastVoiceTarget.current) {
+    if (voiceListening && voiceTarget === target) {
+      stopVoiceInput();
       return;
     }
 
+    voiceSession.current?.stop();
+    voiceSession.current = null;
+    const sessionToken = voiceSessionId.current + 1;
+    voiceSessionId.current = sessionToken;
+
+    lastVoiceTarget.current = target;
     setVoiceMessage("");
-    voiceInputPrefix.current = assistantInput.trim();
+    voiceInputPrefix.current = voiceFieldValue(target).trim();
     const session = startVoiceInput({
       onTranscript: (transcript) => {
+        if (voiceSessionId.current !== sessionToken) return;
         const prefix = voiceInputPrefix.current;
-        setAssistantInput(`${prefix}${prefix && transcript ? " " : ""}${transcript}`);
+        setVoiceFieldValue(target, `${prefix}${prefix && transcript ? " " : ""}${transcript}`);
       },
       onEnd: () => {
+        if (voiceSessionId.current !== sessionToken) return;
         voiceSession.current = null;
         setVoiceListening(false);
+        setVoiceTarget(null);
       },
-      onError: (message) => setVoiceMessage(message),
+      onError: (message) => {
+        if (voiceSessionId.current !== sessionToken) return;
+        setVoiceMessage(message);
+      },
     });
 
     if (!session) {
-      setVoiceMessage("Direct microphone recognition isn’t available here. Click the text box and press Win+H for Windows voice typing.");
+      setVoiceMessage("Microphone recognition isn’t available here. Click a text box and press Win+H for Windows voice typing.");
       return;
     }
 
     voiceSession.current = session;
+    setVoiceTarget(target);
     setVoiceListening(true);
   }
 
   function closeAssistant() {
-    voiceSession.current?.stop();
-    voiceSession.current = null;
-    setVoiceListening(false);
+    stopVoiceInput();
     setAssistantOpen(false);
   }
 
@@ -703,8 +1354,20 @@ function App() {
           <div>
             <p className="eyebrow">{dateLabel}</p>
             <h1>{activeView === "Today" ? greeting : activeView}<span>.</span></h1>
+            {(voiceListening || voiceMessage) && (
+              <p className="voice-status">
+                {voiceListening ? `Listening for ${voiceTarget ?? "field"}… tap 🎙 to stop` : voiceMessage}
+              </p>
+            )}
           </div>
           <div className="topbar-actions">
+            <VoiceMic
+              className="topbar-voice"
+              listening={voiceListening}
+              active={voiceListening}
+              label="Dictate into the last focused field"
+              onClick={() => toggleVoiceFor(lastVoiceTarget.current)}
+            />
             <button className="assistant-trigger" onClick={() => setAssistantOpen(true)}>
               <span>✦</span> Ask Daylight
             </button>
@@ -717,8 +1380,13 @@ function App() {
             {notificationsOpen && (
               <div className="notification-popover">
                 <strong>Notifications</strong>
-                <p>☆ Alex’s birthday is coming up.</p>
                 <p>✦ You have {todaysSchedule.length} schedule block{todaysSchedule.length === 1 ? "" : "s"} today.</p>
+                {briefing?.opportunities?.length ? (
+                  <p>▣ {briefing.opportunities.length} opportunity signal{briefing.opportunities.length === 1 ? "" : "s"} from this morning’s scout.</p>
+                ) : (
+                  <p>▣ Morning scout will watch your long-term goals for openings and signals.</p>
+                )}
+                {scoutMessage && <p>{scoutMessage}</p>}
               </div>
             )}
           </div>
@@ -741,6 +1409,156 @@ function App() {
         {activeView === "Today" ? (
         <div className="content-grid">
           <section className="primary-column">
+            <article className="opportunity-card">
+              <div className="opportunity-heading">
+                <div>
+                  <small>MORNING OPPORTUNITY SCOUT</small>
+                  <h3>Signals for your goals</h3>
+                </div>
+                <div className="opportunity-actions">
+                  <button
+                    type="button"
+                    className="primary-action"
+                    disabled={scoutStatus === "running" || !goalScoutTargets(goals).length}
+                    onClick={() => void openGeminiNewsFlow()}
+                  >
+                    {macroIsReady(macroConfig) ? "Run Gemini macro" : "Open in Gemini"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    onClick={() => setMacroOpen((open) => !open)}
+                  >
+                    {macroOpen ? "Hide macro" : "Calibrate macro"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    onClick={() => setImportOpen((open) => !open)}
+                  >
+                    {importOpen ? "Hide import" : "Paste reply"}
+                  </button>
+                </div>
+              </div>
+              {macroOpen && (
+                <div className="macro-panel">
+                  <p>
+                    Machine-local shortcut: click fixed screen coordinates (your pinned Gemini chat → input → Ctrl+V → Enter → wait → copy reply).
+                    Recalibrate if the window moves. Works in the Daylight desktop app only.
+                  </p>
+                  <label className="macro-toggle">
+                    <input
+                      type="checkbox"
+                      checked={macroConfig.enabled}
+                      onChange={(event) => persistMacro({ ...macroConfig, enabled: event.target.checked })}
+                    />
+                    Enable screen macro for “Run Gemini macro”
+                  </label>
+                  <label className="macro-toggle">
+                    <input
+                      type="checkbox"
+                      checked={macroConfig.openGeminiFirst}
+                      onChange={(event) => persistMacro({ ...macroConfig, openGeminiFirst: event.target.checked })}
+                    />
+                    Open gemini.google.com first
+                  </label>
+                  <label className="macro-wait">
+                    Wait for answer (seconds)
+                    <input
+                      type="number"
+                      min={5}
+                      max={300}
+                      value={macroConfig.waitSeconds}
+                      onChange={(event) => persistMacro({
+                        ...macroConfig,
+                        waitSeconds: Number(event.target.value) || 45,
+                      })}
+                    />
+                  </label>
+                  <div className="macro-points">
+                    {([
+                      ["chat", "1. Pinned Gemini chat"],
+                      ["input", "2. Message input box"],
+                      ["response", "3. Reply text area"],
+                    ] as const).map(([key, label]) => (
+                      <button key={key} type="button" className="ghost-action" onClick={() => void captureMacroPoint(key)}>
+                        {label}
+                        {macroConfig.points[key]
+                          ? ` · (${macroConfig.points[key]!.x}, ${macroConfig.points[key]!.y})`
+                          : " · not set"}
+                      </button>
+                    ))}
+                  </div>
+                  {captureMessage && <p className="opportunity-footnote">{captureMessage}</p>}
+                </div>
+              )}
+              <p className="opportunity-summary">
+                {briefing?.summary
+                  || (goalScoutTargets(goals).length
+                    ? "Goals stay in Firebase. Each morning we rebuild the scout prompt from them, copy it, and open Gemini so your subscription can deep-search the web."
+                    : "Add a long-term goal with watch topics / people in Goals first.")}
+              </p>
+              {briefing?.nextActions?.length ? (
+                <div className="next-actions">
+                  <small>NEXT REACTIONS</small>
+                  <ol>
+                    {briefing.nextActions.map((action) => <li key={action}>{action}</li>)}
+                  </ol>
+                </div>
+              ) : null}
+              {importOpen && (
+                <form className="gemini-import" onSubmit={importGeminiReply}>
+                  <div className="voice-field">
+                    <textarea
+                      value={geminiImportText}
+                      onChange={(event) => setGeminiImportText(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("geminiImport")}
+                      placeholder='Paste Gemini’s JSON reply here… { "summary": "...", "nextActions": [...], "opportunities": [...] }'
+                    />
+                    <VoiceMic
+                      listening={voiceListening}
+                      active={voiceTarget === "geminiImport"}
+                      onClick={() => toggleVoiceFor("geminiImport")}
+                    />
+                  </div>
+                  <div className="opportunity-actions">
+                    <button className="primary-action" type="submit">Import briefing</button>
+                    <button type="button" className="ghost-action" onClick={() => void runApiScoutFallback()}>
+                      API fallback
+                    </button>
+                  </div>
+                </form>
+              )}
+              {briefing?.opportunities?.length ? (
+                <div className="opportunity-list">
+                  {briefing.opportunities.map((item) => (
+                    <article key={item.id}>
+                      <div>
+                        <small>{item.kind}{item.goalTitle ? ` · ${item.goalTitle}` : ""}</small>
+                        <strong>{item.title}</strong>
+                        <p>{item.summary}</p>
+                        {item.whyItMatters && <p className="opportunity-why">{item.whyItMatters}</p>}
+                        {item.nextSteps?.length > 0 && (
+                          <p className="opportunity-why">Next: {item.nextSteps.join(" · ")}</p>
+                        )}
+                      </div>
+                      {item.url && (
+                        <a href={item.url} target="_blank" rel="noreferrer">Open</a>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-note">
+                  {scoutMessage || "No briefing yet — Open in Gemini, then Paste reply."}
+                </p>
+              )}
+              <p className="opportunity-footnote">
+                {scoutMessage ? `${scoutMessage} · ` : ""}
+                {briefing?.sourcesNote
+                  || "Preferred path: Gemini app with your Pro subscription. Prompt is synced to Firebase whenever goals change."}
+              </p>
+            </article>
             {suggestionVisible && (
             <article className="focus-card">
               <div className="focus-copy">
@@ -760,7 +1578,14 @@ function App() {
 
             <section className="section-block">
               <div className="section-heading">
-                <div><h2>Today’s tasks</h2><span>{completedCount} of {tasks.length} complete</span></div>
+                <div>
+                  <h2>Today’s tasks</h2>
+                  <span>
+                    {completedCount} of {tasks.length} complete
+                    {" · "}
+                    {tasks.filter((task) => !task.done && task.priority === "red").length} code red
+                  </span>
+                </div>
                 <span className="points-pill">✦ {completedPoints} pts</span>
               </div>
 
@@ -769,35 +1594,116 @@ function App() {
                 <input
                   value={newTask}
                   onChange={(event) => setNewTask(event.target.value)}
+                  onFocus={() => rememberVoiceTarget("newTask")}
                   placeholder="Add a task, reminder, or idea..."
                   aria-label="New task"
+                />
+                <div className="priority-picker" aria-label="New task priority">
+                  {([
+                    ["red", "Code red"],
+                    ["yellow", "Code yellow"],
+                    ["green", "Code green"],
+                  ] as const).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={`priority-dot ${value} ${newTaskPriority === value ? "active" : ""}`}
+                      title={label}
+                      aria-label={label}
+                      onClick={() => setNewTaskPriority(value)}
+                    />
+                  ))}
+                </div>
+                <VoiceMic
+                  listening={voiceListening}
+                  active={voiceTarget === "newTask"}
+                  onClick={() => toggleVoiceFor("newTask")}
                 />
                 <kbd>Enter</kbd>
               </form>
 
               <div className="task-list">
-                {tasks.map((task) => (
-                  <div className={`task-row ${task.done ? "done" : ""}`} key={task.id}>
-                    <button className="check" onClick={() => toggleTask(task.id)} aria-label={`Mark ${task.title}`}>
-                      {task.done ? "✓" : ""}
-                    </button>
-                    <div className="task-title">
-                      <strong>{task.title}</strong>
-                      <small>{itemLocationLabel(task, task.context === "Anywhere" ? "Anywhere" : task.context)}</small>
+                {(["red", "yellow", "green"] as TaskPriority[]).map((priority) => {
+                  const group = tasks.filter((task) => !task.done && task.priority === priority);
+                  if (!group.length) return null;
+                  const label = priority === "red" ? "Code red · do first" : priority === "yellow" ? "Code yellow · soon" : "Code green · can wait";
+                  return (
+                    <div className={`priority-group ${priority}`} key={priority}>
+                      <small>{label}</small>
+                      {group.map((task) => (
+                        <div className={`task-row priority-${task.priority}`} key={task.id}>
+                          <button className="check" onClick={() => toggleTask(task.id)} aria-label={`Mark ${task.title}`}>
+                            {task.done ? "✓" : ""}
+                          </button>
+                          <div className="task-title">
+                            <strong>{task.title}</strong>
+                            <small>{itemLocationLabel(task, task.context === "Anywhere" ? "Anywhere" : task.context)}</small>
+                          </div>
+                          <div className="priority-picker compact" aria-label={`Priority for ${task.title}`}>
+                            {(["red", "yellow", "green"] as TaskPriority[]).map((value) => (
+                              <button
+                                key={value}
+                                type="button"
+                                className={`priority-dot ${value} ${task.priority === value ? "active" : ""}`}
+                                title={value === "red" ? "Code red" : value === "yellow" ? "Code yellow" : "Code green"}
+                                aria-label={`Set ${value} priority`}
+                                onClick={() => setTaskPriority(task.id, value)}
+                              />
+                            ))}
+                          </div>
+                          <span className="task-points">+{task.points}</span>
+                          <button
+                            className="edit-location"
+                            onClick={() => openLocationEditor("task", task.id)}
+                            aria-label={`Edit ${task.title}`}
+                          >•••</button>
+                          <button
+                            className="remove-task"
+                            onClick={() => persistTasks(tasks.filter((item) => item.id !== task.id))}
+                            aria-label={`Delete ${task.title}`}
+                          >×</button>
+                        </div>
+                      ))}
                     </div>
-                    <span className="task-points">+{task.points}</span>
-                    <button
-                      className="edit-location"
-                      onClick={() => openLocationEditor("task", task.id)}
-                      aria-label={`Edit ${task.title}`}
-                    >•••</button>
-                    <button
-                      className="remove-task"
-                      onClick={() => persistTasks(tasks.filter((item) => item.id !== task.id))}
-                      aria-label={`Delete ${task.title}`}
-                    >×</button>
+                  );
+                })}
+                {tasks.some((task) => task.done) && (
+                  <div className="priority-group done-group">
+                    <small>Completed</small>
+                    {tasks.filter((task) => task.done).map((task) => (
+                      <div className={`task-row done priority-${task.priority}`} key={task.id}>
+                        <button className="check" onClick={() => toggleTask(task.id)} aria-label={`Mark ${task.title}`}>
+                          ✓
+                        </button>
+                        <div className="task-title">
+                          <strong>{task.title}</strong>
+                          <small>{itemLocationLabel(task, task.context === "Anywhere" ? "Anywhere" : task.context)}</small>
+                        </div>
+                        <div className="priority-picker compact">
+                          {(["red", "yellow", "green"] as TaskPriority[]).map((value) => (
+                            <button
+                              key={value}
+                              type="button"
+                              className={`priority-dot ${value} ${task.priority === value ? "active" : ""}`}
+                              onClick={() => setTaskPriority(task.id, value)}
+                            />
+                          ))}
+                        </div>
+                        <span className="task-points">+{task.points}</span>
+                        <button
+                          className="edit-location"
+                          onClick={() => openLocationEditor("task", task.id)}
+                          aria-label={`Edit ${task.title}`}
+                        >•••</button>
+                        <button
+                          className="remove-task"
+                          onClick={() => persistTasks(tasks.filter((item) => item.id !== task.id))}
+                          aria-label={`Delete ${task.title}`}
+                        >×</button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             </section>
           </section>
@@ -851,7 +1757,15 @@ function App() {
 
             <article className="birthday-card">
               <span className="birthday-icon">♢</span>
-              <div><small>UPCOMING</small><strong>{birthdays[0]?.name ?? "Add a birthday"}{birthdays[0] ? "’s birthday" : ""}</strong><p>{birthdays[0]?.date ?? "Never forget an important date."}</p></div>
+              <div>
+                <small>UPCOMING</small>
+                <strong>{upcomingBirthdays[0]?.name ?? "Add a birthday"}{upcomingBirthdays[0] ? "’s birthday" : ""}</strong>
+                <p>
+                  {upcomingBirthdays[0]
+                    ? new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" }).format(new Date(`${upcomingBirthdays[0].date}T12:00:00`))
+                    : "Never forget an important date."}
+                </p>
+              </div>
               <button onClick={() => setActiveView("Birthdays")} aria-label="Birthday details">›</button>
             </article>
           </aside>
@@ -969,8 +1883,19 @@ function App() {
             <div className="workspace-heading">
               <div>
                 <h2>Long-term goals</h2>
-                <p>{cloudStatus}. Goals and planner memory stay in Firebase and are sent to Gemini with each chat.</p>
+                <p>
+                  {cloudStatus}. Goals, todos, habits, schedule, birthdays, places, and journal sync when you sign in. They also guide Gemini chat and the morning scout
+                  (openings, papers, events, public signals).
+                </p>
               </div>
+              <button
+                type="button"
+                className="primary-action"
+                disabled={scoutStatus === "running" || !goalScoutTargets(goals).length}
+                onClick={() => void openGeminiNewsFlow()}
+              >
+                Open scout in Gemini
+              </button>
             </div>
             {!isFirebaseConfigured() ? (
               <div className="plan-empty compact">
@@ -980,34 +1905,274 @@ function App() {
             ) : (
               <>
                 <form className="workspace-form memory-form" onSubmit={saveMemory}>
-                  <textarea
-                    value={memorySummary}
-                    onChange={(event) => setMemorySummary(event.target.value)}
-                    placeholder="Long-term memory: semester goals, constraints, people, preferences..."
-                  />
+                  <div className="voice-field">
+                    <textarea
+                      value={memorySummary}
+                      onChange={(event) => {
+                        setMemorySummary(event.target.value);
+                        setMemorySaveStatus("");
+                      }}
+                      onFocus={() => rememberVoiceTarget("memory")}
+                      placeholder="Long-term memory: semester goals, constraints, people, preferences..."
+                    />
+                    <VoiceMic
+                      listening={voiceListening}
+                      active={voiceTarget === "memory"}
+                      onClick={() => toggleVoiceFor("memory")}
+                    />
+                  </div>
                   <button className="primary-action">Save memory</button>
                 </form>
-                <form className="workspace-form goal-form" onSubmit={createGoal}>
-                  <input value={goalTitle} onChange={(event) => setGoalTitle(event.target.value)} placeholder="Goal, e.g. Finish internship applications" />
+                {memorySaveStatus && <p className="empty-note">{memorySaveStatus}</p>}
+                <div className="life-story-bar">
+                  <p className="empty-note">
+                    {lifeStoryStatus
+                      || (lifeStoryLoaded()
+                        ? "Local autobiography is available for scout + research agents."
+                        : "Add src/data/AUTOBIOGRAPHY.md to give agents your life story.")}
+                    {lifeStory ? ` · ${Math.round(lifeStory.length / 1000)}k chars loaded.` : ""}
+                  </p>
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    disabled={!cloudUserId || !getBundledLifeStory()}
+                    onClick={() => {
+                      if (!cloudUserId) return;
+                      const bundled = getBundledLifeStory();
+                      setLifeStory(bundled);
+                      void saveLifeStory(cloudUserId, bundled).then(() => {
+                        setLifeStoryStatus("Re-synced autobiography to Firebase.");
+                      });
+                    }}
+                  >
+                    Re-sync autobiography
+                  </button>
+                </div>
+                <form className="workspace-form goal-form rich" onSubmit={createGoal}>
+                  <div className="voice-field">
+                    <input
+                      value={goalTitle}
+                      onChange={(event) => setGoalTitle(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("goalTitle")}
+                      placeholder="Goal, e.g. Research assistant in robotics lab"
+                      required
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "goalTitle"} onClick={() => toggleVoiceFor("goalTitle")} />
+                  </div>
+                  <select value={goalDomain} onChange={(event) => setGoalDomain(event.target.value)}>
+                    <option value="research">Research</option>
+                    <option value="career">Career</option>
+                    <option value="academic">Academic</option>
+                    <option value="personal">Personal</option>
+                    <option value="other">Other</option>
+                  </select>
                   <input type="date" value={goalDeadline} onChange={(event) => setGoalDeadline(event.target.value)} />
-                  <input value={goalSteps} onChange={(event) => setGoalSteps(event.target.value)} placeholder="Sub-steps, separated by commas" />
+                  <div className="voice-field">
+                    <input
+                      value={goalSteps}
+                      onChange={(event) => setGoalSteps(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("goalSteps")}
+                      placeholder="Sub-steps, commas"
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "goalSteps"} onClick={() => toggleVoiceFor("goalSteps")} />
+                  </div>
+                  <div className="voice-field wide">
+                    <input
+                      value={goalWatchQueries}
+                      onChange={(event) => setGoalWatchQueries(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("goalWatch")}
+                      placeholder="Watch topics, e.g. robotics RA opening, CMU RI hiring"
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "goalWatch"} onClick={() => toggleVoiceFor("goalWatch")} />
+                  </div>
+                  <div className="voice-field wide">
+                    <input
+                      value={goalPeople}
+                      onChange={(event) => setGoalPeople(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("goalPeople")}
+                      placeholder="People / labs / orgs to watch"
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "goalPeople"} onClick={() => toggleVoiceFor("goalPeople")} />
+                  </div>
+                  <div className="voice-field wide">
+                    <input
+                      value={goalNotes}
+                      onChange={(event) => setGoalNotes(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("goalNotes")}
+                      placeholder="Why this matters / what a good opportunity looks like"
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "goalNotes"} onClick={() => toggleVoiceFor("goalNotes")} />
+                  </div>
                   <button className="primary-action">Add goal</button>
                 </form>
+                <p className="empty-note">
+                  Tip: add “work in Marsden lab”, then use
+                  <strong> Deep research in Gemini Pro</strong> (best search) or
+                  <strong> Research how to get there</strong> (5 API agents: academic fit, warm ties, referrals, events, industry).
+                  Confirm before it updates the morning scout.
+                  {scoutMessage ? ` ${scoutMessage}` : ""}
+                </p>
+                {researchError && <p className="plan-error">{researchError}</p>}
+                {researchImportOpen && researchImportGoal && (
+                  <form className="research-panel" onSubmit={importDeepResearchReply}>
+                    <header>
+                      <div>
+                        <small>GEMINI PRO DEEP RESEARCH IMPORT</small>
+                        <h3>{researchImportGoal.title}</h3>
+                        <p>Paste Gemini’s JSON reply after Deep Research finishes.</p>
+                      </div>
+                      <button type="button" className="ghost-action" onClick={() => setResearchImportOpen(false)}>Hide</button>
+                    </header>
+                    <textarea
+                      value={researchImportText}
+                      onChange={(event) => setResearchImportText(event.target.value)}
+                      placeholder='Paste JSON with deepBriefing.currentWork / alignment / referrals / events …'
+                    />
+                    <footer>
+                      <button className="primary-action" type="submit">Import deep research</button>
+                    </footer>
+                  </form>
+                )}
+                {researchDraft && (
+                  <section className="research-panel">
+                    <header>
+                      <div>
+                        <small>GOAL PATH RESEARCH · {researchDraft.source}</small>
+                        <h3>{researchDraft.goalTitle}</h3>
+                        <p>{researchDraft.summary}</p>
+                      </div>
+                      <button type="button" className="ghost-action" onClick={() => setResearchDraft(null)}>Close</button>
+                    </header>
+
+                    <div className="research-briefing">
+                      {([
+                        ["currentWork", "What they’re working on"],
+                        ["alignment", "How you align"],
+                        ["referrals", "Referrals / warm paths"],
+                        ["events", "Events / networking"],
+                      ] as const).map(([key, label]) => (
+                        <article key={key}>
+                          <small>{label}</small>
+                          {researchDraft.deepBriefing[key].length ? (
+                            <ul>
+                              {researchDraft.deepBriefing[key].map((item) => <li key={item}>{item}</li>)}
+                            </ul>
+                          ) : (
+                            <p>No items yet for this section.</p>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="research-lenses five">
+                      {researchDraft.lenses.map((lens) => (
+                        <article key={lens.lens}>
+                          <small>{lens.lens.replace(/_/g, " ")} · {Math.round(lens.weight * 100)}%</small>
+                          <p>{lens.rationale || "No rationale returned."}</p>
+                          {lens.signals.length > 0 && (
+                            <ul>{lens.signals.slice(0, 4).map((signal) => <li key={signal}>{signal}</li>)}</ul>
+                          )}
+                          {lens.nextMoves.length > 0 && (
+                            <ul className="research-moves">
+                              {lens.nextMoves.slice(0, 3).map((move) => <li key={move}>{move}</li>)}
+                            </ul>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+
+                    <label>
+                      <span>People / labs / orgs (comma-separated) — edit before saving</span>
+                      <textarea
+                        value={researchDraft.proposedPeople.join(", ")}
+                        onChange={(event) => setResearchDraft({
+                          ...researchDraft,
+                          proposedPeople: splitList(event.target.value),
+                        })}
+                      />
+                    </label>
+                    <label>
+                      <span>Watch queries (comma-separated)</span>
+                      <textarea
+                        value={researchDraft.proposedWatchQueries.join(", ")}
+                        onChange={(event) => setResearchDraft({
+                          ...researchDraft,
+                          proposedWatchQueries: splitList(event.target.value),
+                        })}
+                      />
+                    </label>
+                    <label>
+                      <span>Next sub-steps (comma-separated)</span>
+                      <textarea
+                        value={researchDraft.proposedSubSteps.join(", ")}
+                        onChange={(event) => setResearchDraft({
+                          ...researchDraft,
+                          proposedSubSteps: splitList(event.target.value),
+                        })}
+                      />
+                    </label>
+                    <label>
+                      <span>Notes / path strategy</span>
+                      <textarea
+                        value={researchDraft.proposedNotes}
+                        onChange={(event) => setResearchDraft({
+                          ...researchDraft,
+                          proposedNotes: event.target.value,
+                        })}
+                      />
+                    </label>
+
+                    <footer>
+                      <button type="button" className="ghost-action" onClick={() => setResearchDraft(null)}>Discard</button>
+                      <button
+                        type="button"
+                        className="primary-action"
+                        disabled={researchSaving}
+                        onClick={() => void confirmGoalResearch()}
+                      >
+                        {researchSaving ? "Saving…" : "Confirm path → update goal + scout"}
+                      </button>
+                    </footer>
+                  </section>
+                )}
                 <div className="goal-list">
                   {goals.map((goal) => (
                     <article key={goal.id}>
                       <div>
                         <strong>{goal.title}</strong>
-                        <small>{goal.status}{goal.deadline ? ` · due ${goal.deadline}` : ""}</small>
+                        <small>
+                          {goal.status}
+                          {goal.domain ? ` · ${goal.domain}` : ""}
+                          {goal.deadline ? ` · due ${goal.deadline}` : ""}
+                        </small>
                         {goal.subSteps.length > 0 && <p>{goal.subSteps.join(" · ")}</p>}
+                        {goal.watchQueries.length > 0 && <p>Watch: {goal.watchQueries.join(" · ")}</p>}
+                        {goal.people.length > 0 && <p>People: {goal.people.join(" · ")}</p>}
+                        {goal.notes && <p>{goal.notes}</p>}
                       </div>
                       <div className="goal-actions">
                         {goal.status !== "done" && (
-                          <button onClick={async () => {
-                            if (!cloudUserId) return;
-                            await setGoalStatus(cloudUserId, goal.id, "done");
-                            setGoals(await loadGoals(cloudUserId));
-                          }}>Done</button>
+                          <>
+                            <button
+                              type="button"
+                              disabled={researchingGoalId === goal.id}
+                              onClick={() => void runDeepResearchInGemini(goal)}
+                            >
+                              {researchingGoalId === goal.id ? "Deep researching…" : "Deep research in Gemini Pro"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={researchingGoalId === goal.id}
+                              onClick={() => void runGoalResearch(goal)}
+                            >
+                              {researchingGoalId === goal.id ? "Researching…" : "5-agent API research"}
+                            </button>
+                            <button onClick={async () => {
+                              if (!cloudUserId) return;
+                              await setGoalStatus(cloudUserId, goal.id, "done");
+                              setGoals(await loadGoals(cloudUserId));
+                            }}>Done</button>
+                          </>
                         )}
                         <button onClick={async () => {
                           if (!cloudUserId) return;
@@ -1028,7 +2193,15 @@ function App() {
               <div><h2>Daily habits</h2><p>Build consistency one checkmark at a time.</p></div>
             </div>
             <form className="workspace-form" onSubmit={addHabit}>
-              <input value={newHabit} onChange={(event) => setNewHabit(event.target.value)} placeholder="New habit, e.g. Read for 20 minutes" />
+              <div className="voice-field">
+                <input
+                  value={newHabit}
+                  onChange={(event) => setNewHabit(event.target.value)}
+                  onFocus={() => rememberVoiceTarget("newHabit")}
+                  placeholder="New habit, e.g. Read for 20 minutes"
+                />
+                <VoiceMic listening={voiceListening} active={voiceTarget === "newHabit"} onClick={() => toggleVoiceFor("newHabit")} />
+              </div>
               <button className="primary-action">Add habit</button>
             </form>
             <div className="habit-list-page">
@@ -1115,21 +2288,173 @@ function App() {
         ) : activeView === "Birthdays" ? (
           <section className="workspace-page">
             <div className="workspace-heading">
-              <div><h2>Birthdays</h2><p>Important people and yearly reminders.</p></div>
+              <div>
+                <h2>Birthdays</h2>
+                <p>
+                  {planner.getFullYear()} calendar — same idea as a normal year view. Flip months to see who’s coming up
+                  (this week, next week, later).
+                </p>
+              </div>
+              <button
+                type="button"
+                className="ghost-action"
+                onClick={() => setBirthdayMonth(new Date(planner.getFullYear(), planner.getMonth(), 1))}
+              >
+                This month
+              </button>
             </div>
             <form className="workspace-form birthday-form" onSubmit={addBirthday}>
-              <input value={newBirthday} onChange={(event) => setNewBirthday(event.target.value)} placeholder="Friend’s name" />
-              <input type="date" value={birthdayDate} onChange={(event) => setBirthdayDate(event.target.value)} />
+              <div className="voice-field">
+                <input
+                  value={newBirthday}
+                  onChange={(event) => setNewBirthday(event.target.value)}
+                  onFocus={() => rememberVoiceTarget("newBirthday")}
+                  placeholder="Friend’s name"
+                />
+                <VoiceMic listening={voiceListening} active={voiceTarget === "newBirthday"} onClick={() => toggleVoiceFor("newBirthday")} />
+              </div>
+              <input
+                type="date"
+                value={birthdayDate}
+                min={`${planner.getFullYear()}-01-01`}
+                max={`${planner.getFullYear()}-12-31`}
+                onChange={(event) => setBirthdayDate(event.target.value)}
+              />
               <button className="primary-action">Add birthday</button>
             </form>
-            <div className="birthday-list-page">
-              {birthdays.map((birthday) => (
-                <article key={birthday.id}>
-                  <span>☆</span>
-                  <div><strong>{birthday.name}</strong><small>{new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric" }).format(new Date(`${birthday.date}T12:00:00`))}</small></div>
-                  <button className="delete-action" onClick={() => persistBirthdays(birthdays.filter((item) => item.id !== birthday.id))}>Delete</button>
+
+            <div className="birthday-layout">
+              <section className="birthday-calendar" aria-label={`${planner.getFullYear()} birthday calendar`}>
+                <div className="birthday-calendar-header">
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    disabled={birthdayMonth.getMonth() === 0}
+                    onClick={() => shiftBirthdayMonth(-1)}
+                  >
+                    ‹
+                  </button>
+                  <div className="birthday-calendar-title">
+                    <strong>
+                      {new Intl.DateTimeFormat("en-US", { month: "long" }).format(
+                        new Date(planner.getFullYear(), birthdayMonth.getMonth(), 1),
+                      )}
+                    </strong>
+                    <small>{planner.getFullYear()}</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    disabled={birthdayMonth.getMonth() === 11}
+                    onClick={() => shiftBirthdayMonth(1)}
+                  >
+                    ›
+                  </button>
+                </div>
+                <div className="birthday-weekdays" aria-hidden="true">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+                    <span key={day}>{day}</span>
+                  ))}
+                </div>
+                <div className="birthday-grid">
+                  {birthdayCalendar.map((cell) => (
+                    cell.day === null ? (
+                      <div className="birthday-cell empty" key={cell.key} />
+                    ) : (
+                      <button
+                        type="button"
+                        key={cell.key}
+                        className={[
+                          "birthday-cell",
+                          cell.people.length ? "has-people" : "",
+                          cell.isThisWeek ? "this-week" : "",
+                          cell.isToday ? "today" : "",
+                          selectedBirthdayDay === cell.monthDay ? "selected" : "",
+                        ].filter(Boolean).join(" ")}
+                        onClick={() => setSelectedBirthdayDay(cell.monthDay)}
+                      >
+                        <span className="birthday-day-number">{cell.day}</span>
+                        {cell.people.length > 0 && (
+                          <span className="birthday-names">
+                            {cell.people.slice(0, 2).map((person) => person.name.split(" ")[0]).join(", ")}
+                            {cell.people.length > 2 ? ` +${cell.people.length - 2}` : ""}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  ))}
+                </div>
+              </section>
+
+              <aside className="birthday-side">
+                <article className="birthday-day-detail">
+                  <small>SELECTED DAY</small>
+                  <strong>
+                    {selectedBirthdayDay
+                      ? new Intl.DateTimeFormat("en-US", {
+                        weekday: "long",
+                        month: "long",
+                        day: "numeric",
+                        year: "numeric",
+                      }).format(new Date(`${planner.getFullYear()}-${selectedBirthdayDay}T12:00:00`))
+                      : "Pick a day"}
+                  </strong>
+                  {selectedBirthdayDay && (
+                    <p className="empty-note">{describeBirthdayDistance(selectedBirthdayDay)}</p>
+                  )}
+                  {selectedDayPeople.length ? (
+                    <div className="birthday-list-page compact">
+                      {selectedDayPeople.map((birthday) => (
+                        <article key={birthday.id}>
+                          <span>☆</span>
+                          <div>
+                            <strong>{birthday.name}</strong>
+                            <small>{describeBirthdayDistance(birthdayMonthDay(birthday.date))}</small>
+                          </div>
+                          <button
+                            className="delete-action"
+                            onClick={() => persistBirthdays(birthdays.filter((item) => item.id !== birthday.id))}
+                          >
+                            Delete
+                          </button>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty-note">
+                      {selectedBirthdayDay ? "No birthdays on this day." : "Click a marked day to see who’s celebrating."}
+                    </p>
+                  )}
                 </article>
-              ))}
+
+                <article className="birthday-day-detail">
+                  <small>COMING UP IN {planner.getFullYear()}</small>
+                  <strong>From today forward</strong>
+                  <div className="birthday-list-page compact">
+                    {upcomingBirthdays.map((birthday) => (
+                      <article key={birthday.id}>
+                        <span>☆</span>
+                        <div>
+                          <strong>{birthday.name}</strong>
+                          <small>{describeBirthdayDistance(birthday.monthDay)}</small>
+                        </div>
+                        <button
+                          type="button"
+                          className="ghost-action"
+                          onClick={() => {
+                            const month = Number(birthday.monthDay.slice(0, 2));
+                            setBirthdayMonth(new Date(planner.getFullYear(), month - 1, 1));
+                            setSelectedBirthdayDay(birthday.monthDay);
+                          }}
+                        >
+                          Show
+                        </button>
+                      </article>
+                    ))}
+                    {!upcomingBirthdays.length && <p className="empty-note">No birthdays saved yet.</p>}
+                  </div>
+                </article>
+              </aside>
             </div>
           </section>
         ) : (
@@ -1137,6 +2462,49 @@ function App() {
             <div className="workspace-heading">
               <div><h2>Settings</h2><p>Control how Daylight behaves on your desktop.</p></div>
             </div>
+            <section className="places-settings sync-settings">
+              <div className="settings-section-title">
+                <div>
+                  <strong>Cloud sync</strong>
+                  <small>
+                    No email account needed. Use the same vault key on every device and they share one Firebase folder.
+                  </small>
+                </div>
+                <span>☁</span>
+              </div>
+              <p className="sync-status-line">{cloudStatus}</p>
+              {syncMessage && <p className="sync-status-line">{syncMessage}</p>}
+              <form className="sync-auth-form" onSubmit={applySyncKey}>
+                <label className="sync-key-field">
+                  <span>Vault key (same on PC, iMac, iPhone)</span>
+                  <input
+                    value={syncKeyDraft}
+                    onChange={(event) => setSyncKeyDraft(event.target.value)}
+                    placeholder="e.g. nikita-daylight"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </label>
+                <div className="sync-auth-actions">
+                  <button className="primary-action" type="submit" disabled={authBusy}>Save key</button>
+                  <button className="secondary-action" type="button" disabled={authBusy} onClick={copySyncKey}>
+                    Copy key
+                  </button>
+                  <button className="secondary-action" type="button" disabled={authBusy || !cloudUserId} onClick={forceUploadLocalPlanner}>
+                    Push this device to cloud
+                  </button>
+                </div>
+              </form>
+              {authError && <p className="places-warning">{authError}</p>}
+              <p className="empty-note">
+                If you see “insufficient permissions”, open{" "}
+                <a href="https://console.firebase.google.com/project/daylight-fc0c2/firestore/rules" target="_blank" rel="noreferrer">
+                  Firestore Rules
+                </a>
+                , paste the contents of <code>firestore.rules</code> from this project, then Publish.
+                Also keep Authentication → Anonymous enabled.
+              </p>
+            </section>
             <section className="places-settings">
               <div className="settings-section-title">
                 <div><strong>Saved places</strong><small>Add as many places as you need. Matching names automatically connect to events.</small></div>
@@ -1145,11 +2513,27 @@ function App() {
               <form className="place-create-form" onSubmit={addPlace}>
                 <label>
                   <span>Name</span>
-                  <input value={newPlaceName} onChange={(event) => setNewPlaceName(event.target.value)} placeholder="LERN 102, Pottruck Gym…" />
+                  <div className="voice-field">
+                    <input
+                      value={newPlaceName}
+                      onChange={(event) => setNewPlaceName(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("newPlaceName")}
+                      placeholder="LERN 102, Pottruck Gym…"
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "newPlaceName"} onClick={() => toggleVoiceFor("newPlaceName")} />
+                  </div>
                 </label>
                 <label>
                   <span>Address, coordinates, or Google Maps link</span>
-                  <input value={newPlaceAddress} onChange={(event) => setNewPlaceAddress(event.target.value)} placeholder="3700 Walnut St or 39.95, -75.19" />
+                  <div className="voice-field">
+                    <input
+                      value={newPlaceAddress}
+                      onChange={(event) => setNewPlaceAddress(event.target.value)}
+                      onFocus={() => rememberVoiceTarget("newPlaceAddress")}
+                      placeholder="3700 Walnut St or 39.95, -75.19"
+                    />
+                    <VoiceMic listening={voiceListening} active={voiceTarget === "newPlaceAddress"} onClick={() => toggleVoiceFor("newPlaceAddress")} />
+                  </div>
                 </label>
                 <label>
                   <span>Type</span>
@@ -1228,12 +2612,16 @@ function App() {
             {locationPlaceId === "custom" && (
               <label>
                 <span>Address, coordinates, or Google Maps link</span>
-                <input
-                  value={customAddress}
-                  onChange={(event) => setCustomAddress(event.target.value)}
-                  placeholder="Paste the location here"
-                  autoFocus
-                />
+                <div className="voice-field">
+                  <input
+                    value={customAddress}
+                    onChange={(event) => setCustomAddress(event.target.value)}
+                    onFocus={() => rememberVoiceTarget("customAddress")}
+                    placeholder="Paste the location here"
+                    autoFocus
+                  />
+                  <VoiceMic listening={voiceListening} active={voiceTarget === "customAddress"} onClick={() => toggleVoiceFor("customAddress")} />
+                </div>
                 {customAddress && <small>Recognized as {parseAddressInput(customAddress).format.replace("-", " ")}</small>}
               </label>
             )}
@@ -1327,6 +2715,7 @@ function App() {
               <textarea
                 value={assistantInput}
                 onChange={(event) => setAssistantInput(event.target.value)}
+                onFocus={() => rememberVoiceTarget("assistant")}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
@@ -1337,15 +2726,13 @@ function App() {
                 autoFocus
               />
               <div>
-                <small>{voiceListening ? "Listening… speak naturally" : "Enter to send · Shift+Enter for a new line"}</small>
+                <small>{voiceListening && voiceTarget === "assistant" ? "Listening… speak naturally" : "Enter to send · Shift+Enter for a new line"}</small>
                 <span className="compose-actions">
-                  <button
-                    type="button"
-                    className={`voice-button ${voiceListening ? "listening" : ""}`}
-                    onClick={toggleVoiceInput}
-                    aria-label={voiceListening ? "Stop voice typing" : "Start voice typing"}
-                    title={voiceListening ? "Stop listening" : "Voice typing"}
-                  >{voiceListening ? "■" : "🎙"}</button>
+                  <VoiceMic
+                    listening={voiceListening}
+                    active={voiceTarget === "assistant"}
+                    onClick={() => toggleVoiceFor("assistant")}
+                  />
                   <button type="submit" aria-label="Send message">↑</button>
                 </span>
               </div>
