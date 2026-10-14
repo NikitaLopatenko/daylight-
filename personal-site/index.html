@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Nikita Lopatenko — student · builder · table tennis</title>
+    <meta
+      name="description"
+      content="Personal site of Nikita Lopatenko — master’s student in scientific computing at Penn. Projects, research, friends, and table tennis."
+    />
+    <meta name="author" content="Nikita Lopatenko" />
+    <meta property="og:title" content="Nikita Lopatenko" />
+    <meta
+      property="og:description"
+      content="Master’s freshman in scientific computing. I build things with friends, restart clubs, and keep a messy research notebook on purpose."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Source+Serif+4:opsz,ital,wght@8..60,0,400;8..60,0,600;8..60,1,400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true">
+      <div class="orb orb-a"></div>
+      <div class="orb orb-b"></div>
+      <div class="grid-fade"></div>
+    </div>
+
+    <header class="topbar">
+      <a class="mark" href="#top">NL</a>
+      <nav>
+        <a href="#work">Work</a>
+        <a href="#beyond">Beyond code</a>
+        <a href="#about">About</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <p class="eyebrow reveal">Penn · MSE Scientific Computing · master’s freshman</p>
+        <h1 class="reveal delay-1">
+          <span class="brand">Nikita Lopatenko</span>
+        </h1>
+        <p class="lede reveal delay-2">
+          I’m 20, a few months into my master’s, and I like building things that touch the real world —
+          research software, small systems, and clubs restarted with friends who showed up when it mattered.
+          Nothing here was magic. Mostly late nights, group chats, and “what if we just try?”
+        </p>
+        <div class="cta-row reveal delay-3">
+          <a class="btn primary" href="mailto:lopatenkonikita@gmail.com">Email me</a>
+          <a class="btn ghost" href="https://linkedin.com/in/nikitalopatenko" target="_blank" rel="noreferrer">LinkedIn</a>
+          <a class="btn ghost" href="https://github.com/NikitaLopatenko" target="_blank" rel="noreferrer">GitHub</a>
+        </div>
+        <dl class="stat-strip reveal delay-4">
+          <div>
+            <dt>Now</dt>
+            <dd>MSE Scientific Computing, Penn</dd>
+          </div>
+          <div>
+            <dt>Before</dt>
+            <dd>BS Applied Math + CS minor, Utah</dd>
+          </div>
+          <div>
+            <dt>Also</dt>
+            <dd>Utah Table Tennis — with a whole team</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section id="work" class="section">
+        <div class="section-head">
+          <h2>Selected work</h2>
+          <p>
+            Stuff I’ve shipped, hacked on, or competed with. Still learning in public —
+            if something looks polished, it probably went through a few ugly drafts first.
+          </p>
+        </div>
+
+        <article class="project featured reveal">
+          <div class="project-meta">
+            <span class="tag">Desktop app</span>
+            <span class="tag">Firebase</span>
+            <span class="tag">Tauri</span>
+          </div>
+          <h3>Daylight</h3>
+          <p>
+            A personal day planner I actually use every morning — tasks, habits, schedule, and a research
+            “opportunity scout” wired to Gemini. Syncs across my Windows PC and iMac so the same messy plan follows me.
+          </p>
+          <ul class="metrics">
+            <li><strong>Cross-device</strong> vault sync</li>
+            <li><strong>Voice</strong> input throughout</li>
+            <li><strong>Goals →</strong> morning briefing loop</li>
+          </ul>
+          <a class="text-link" href="https://github.com/NikitaLopatenko/daylight-" target="_blank" rel="noreferrer">View on GitHub ↗</a>
+        </article>
+
+        <div class="project-grid">
+          <article class="project reveal">
+            <div class="project-meta">
+              <span class="tag">Humanitarian</span>
+              <span class="tag">Swift</span>
+            </div>
+            <h3>Meal Lift</h3>
+            <p>
+              Offline-first logistics app for routing humanitarian aid to Ukraine — adjacency-matrix routing on top of Firebase.
+              Built because the problem was real, not because it looked good on a resume.
+            </p>
+            <p class="metric-line">Helped support a workflow moving <strong>50+ tons / month</strong></p>
+          </article>
+
+          <article class="project reveal">
+            <div class="project-meta">
+              <span class="tag">Hackathon</span>
+              <span class="tag">CAD</span>
+            </div>
+            <h3>CAD-View</h3>
+            <p>
+              Photo / mesh → editable SolidWorks-style feature trees (CadQuery / OpenCascade). Built with a teammate
+              (shoutout Aditya) — we placed in the top 10 at VoltHacks 2026 and learned a lot about CAD guts the hard way.
+            </p>
+            <a class="text-link" href="https://github.com/NikitaLopatenko/CAD-view" target="_blank" rel="noreferrer">GitHub ↗</a>
+            <a class="text-link" href="https://devpost.com/software/cad-view" target="_blank" rel="noreferrer">Devpost ↗</a>
+          </article>
+
+          <article class="project reveal">
+            <div class="project-meta">
+              <span class="tag">NVIDIA</span>
+              <span class="tag">1st place</span>
+            </div>
+            <h3>Breath of Fresh Air</h3>
+            <p>
+              Air-quality modeling hackathon project. Somehow landed <strong>1st place</strong> with an R² of about
+              <strong>0.87</strong> — mostly panic, coffee, and “does this even compile?”
+            </p>
+          </article>
+
+          <article class="project reveal">
+            <div class="project-meta">
+              <span class="tag">COMAP MCM</span>
+              <span class="tag">Math modeling</span>
+            </div>
+            <h3>Bridge transit model</h3>
+            <p>
+              Francis Scott Key Bridge transit modeling with a graph + neural-ODE approach (DMST-GNODE).
+              U.S. rank <strong>3 / 17</strong> in our category — late nights, differential equations, and a team that refused to sleep.
+            </p>
+          </article>
+
+          <article class="project reveal">
+            <div class="project-meta">
+              <span class="tag">Research</span>
+              <span class="tag">In progress</span>
+            </div>
+            <h3>Coronary hemodynamics</h3>
+            <p>
+              Working with Amir Arzani at Utah on how collateral arteries change flow around stenosis —
+              SimVascular, HPC runs, and ML surrogates. Aiming for APS DFD 2026; preprint still cooking
+              (translation: lots of plots that almost look right).
+            </p>
+          </article>
+
+          <article class="project reveal">
+            <div class="project-meta">
+              <span class="tag">GPU</span>
+              <span class="tag">Coursework</span>
+            </div>
+            <h3>CUDA path tracer</h3>
+            <p>
+              Built for Penn’s GPU Programming course (CIS 5650) — learning how to think in warps and memory
+              when every millisecond matters (and when my first kernels… didn’t).
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section id="beyond" class="section beyond">
+        <div class="section-head">
+          <h2>Beyond the keyboard</h2>
+          <p>Friends, gyms, mountains — the part that keeps the semester human.</p>
+        </div>
+
+        <div class="beyond-layout">
+          <article class="beyond-card main reveal">
+            <p class="kicker">Table tennis</p>
+            <h3>We restarted the Utah club together</h3>
+            <p>
+              The university club had gone quiet for years. Me and my friends decided to bring it back —
+              we refiled the paperwork, tracked down students who’d played about ten years earlier, begged for
+              facility time, and slowly rebuilt the culture from zero. I was president for a while, but it was never a solo act:
+              officers, coaches, volunteers, and regulars did the real heavy lifting.
+            </p>
+            <p>
+              Along the way we taught <em>ESSF 1119 Table Tennis</em>, grew to <strong>150+</strong> members,
+              traveled to compete (Weber State, Colorado Boulder, and more), hosted warm-up opens with
+              <strong>100+</strong> players, and raised a bit of money for gear. I’m away at Penn now, but I hope to
+              stop by whenever I’m back — the new officer team is carrying it forward and they’re awesome.
+            </p>
+            <p>
+              Peek at the club anytime:
+              <a class="ig-link" href="https://www.instagram.com/uofutabletennis/" target="_blank" rel="noreferrer">@uofutabletennis ↗</a>
+              — feel free to stop by a practice if you’re at Utah.
+            </p>
+          </article>
+
+          <div class="beyond-stack">
+            <article class="beyond-card reveal">
+              <p class="kicker">Martial arts</p>
+              <h3>10+ years on the mat</h3>
+              <p>
+                Self-defense club officer / instructor; helped with taekwondo on campus.
+                That discipline shows up in how I practice math <em>(or it doesn’t — depends on the week)</em>.
+              </p>
+            </article>
+            <article class="beyond-card reveal">
+              <p class="kicker">Teaching</p>
+              <h3>Olympiad geometry tutor</h3>
+              <p>
+                In Ukraine I taught after-school olympiad geometry — projective tricks, poles and polars,
+                the stuff that made me fall in love with proof (and occasionally cry over a diagram).
+                Academy of Sciences of Ukraine: <strong>2nd (2021)</strong>, <strong>1st (2022)</strong>.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="about" class="section about">
+        <div class="section-head">
+          <h2>About</h2>
+          <p>Short version for humans and LinkedIn.</p>
+        </div>
+        <div class="about-grid">
+          <div class="about-copy reveal">
+            <p>
+              I grew up in Ukraine, finished undergrad at the University of Utah, and I’m now a master’s freshman
+              in scientific computing at Penn (about two months in — still finding the good coffee).
+              I care about problems where math meets something physical — blood flow in vessels, robots you can feel,
+              GPU code that has to be fast.
+            </p>
+            <p>
+              I’m not trying to sound like a senior engineer with a decade of war stories. I’m a student who
+              joins friends on half-baked ideas, enters contests, and keeps a research notebook messy on purpose.
+              If this site says anything useful, it’s that hard things are usually just a bunch of small, doable steps
+              (and a group chat that won’t let you quit).
+            </p>
+            <p class="languages">
+              Languages: Ukrainian &amp; Russian (native) · English (fluent)
+            </p>
+          </div>
+          <aside class="about-aside reveal">
+            <h3>School</h3>
+            <ul>
+              <li>
+                <strong>University of Pennsylvania</strong><br />
+                MSE Scientific Computing · master’s freshman<br />
+                started 2026
+              </li>
+              <li>
+                <strong>University of Utah</strong><br />
+                BS Applied Mathematics, CS minor · GPA 3.85<br />
+                Utah Global International Merit Award
+              </li>
+            </ul>
+            <h3>Tools I reach for</h3>
+            <p class="skills">
+              Python · C++/CUDA · TypeScript/React · Firebase · Tauri · SimVascular · SOLIDWORKS · Git
+            </p>
+          </aside>
+        </div>
+      </section>
+
+      <section id="contact" class="section contact">
+        <div class="contact-panel reveal">
+          <h2>Say hi</h2>
+          <p>
+            Open to research internships, curious collaborations, and anyone who wants to talk scientific computing,
+            GPU work, or table tennis strategy (I’m average; don’t expect coaching miracles).
+          </p>
+          <div class="cta-row">
+            <a class="btn primary" href="mailto:lopatenkonikita@gmail.com">lopatenkonikita@gmail.com</a>
+            <a class="btn ghost" href="https://linkedin.com/in/nikitalopatenko" target="_blank" rel="noreferrer">LinkedIn</a>
+            <a class="btn ghost" href="https://github.com/NikitaLopatenko" target="_blank" rel="noreferrer">GitHub</a>
+            <a class="btn ghost" href="https://www.instagram.com/uofutabletennis/" target="_blank" rel="noreferrer">Utah TT Instagram</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>© <span id="year"></span> Nikita Lopatenko</span>
+      <span class="footer-note">Built as a student site — updated as projects (and jokes) grow.</span>
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
