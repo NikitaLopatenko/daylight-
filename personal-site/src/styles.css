@@ -160,11 +160,33 @@ main,
 .hero {
   max-width: var(--max);
   margin: 0 auto;
-  padding: clamp(48px, 10vh, 96px) 24px 56px;
+  padding: clamp(40px, 8vh, 80px) 24px 56px;
   min-height: min(88vh, 860px);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.7fr);
+  gap: clamp(28px, 5vw, 56px);
+  align-items: center;
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
+.hero-photo {
+  margin: 0;
+}
+
+.hero-photo img {
+  width: 100%;
+  max-width: 380px;
+  aspect-ratio: 1;
+  object-fit: cover;
+  object-position: center top;
+  border-radius: 28px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 22px 48px rgba(20, 32, 40, 0.12);
+  display: block;
 }
 
 .eyebrow {
@@ -578,13 +600,18 @@ main,
   .stat-strip,
   .project-grid,
   .beyond-layout,
-  .about-grid {
+  .about-grid,
+  .hero {
     grid-template-columns: 1fr;
   }
 
   .hero {
     min-height: auto;
     padding-top: 40px;
+  }
+
+  .hero-photo img {
+    max-width: 280px;
   }
 
   .brand {
