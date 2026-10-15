@@ -174,19 +174,16 @@ main,
 
 .hero-photo {
   margin: 0;
+  justify-self: center;
 }
 
 .hero-photo img {
   width: 100%;
-  max-width: 380px;
-  aspect-ratio: 1;
-  object-fit: cover;
-  object-position: center top;
-  border-radius: 28px;
-  background: #fff;
-  border: 1px solid var(--line);
-  box-shadow: 0 22px 48px rgba(20, 32, 40, 0.12);
+  max-width: 340px;
+  height: auto;
+  object-fit: contain;
   display: block;
+  filter: drop-shadow(0 18px 28px rgba(20, 32, 40, 0.14));
 }
 
 .eyebrow {
@@ -611,7 +608,7 @@ main,
   }
 
   .hero-photo img {
-    max-width: 280px;
+    max-width: 240px;
   }
 
   .brand {
