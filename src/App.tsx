@@ -88,17 +88,30 @@ import {
 } from "./lib/plannerSync";
 import { readSyncKey, writeSyncKey } from "./lib/syncKey";
 import {
-  dayCheckIns,
+  buildDaySlotRows,
+  DEVICE_LABELS,
+  DEVICES,
+  fillScreenFreeGaps,
+  formatClock,
   formatSlotRange,
+  lastAnyDeviceActive,
+  mergeHeartbeats,
   pendingCheckInSlot,
   readCheckIns,
   readCheckInsEnabled,
+  readDeviceKind,
+  readLocalHeartbeats,
   readSnoozeUntil,
+  touchHeartbeat,
   upsertCheckIn,
   writeCheckIns,
   writeCheckInsEnabled,
+  writeDeviceKind,
+  writeLocalHeartbeats,
   writeSnoozeUntil,
   type CheckInLog,
+  type DeviceHeartbeats,
+  type DeviceKind,
   type TimeCheckIn,
 } from "./lib/checkIns";
 import { startVoiceInput, type VoiceSession } from "./speech";
@@ -302,7 +315,9 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [checkIns, setCheckIns] = useState<CheckInLog>(() => readCheckIns());
   const [checkInsEnabled, setCheckInsEnabled] = useState(() => readCheckInsEnabled());
-  const [pendingCheckIn, setPendingCheckIn] = useState<Omit<TimeCheckIn, "note" | "createdAt" | "skipped"> | null>(null);
+  const [deviceKind, setDeviceKind] = useState<DeviceKind>(() => readDeviceKind());
+  const [deviceHeartbeats, setDeviceHeartbeats] = useState<DeviceHeartbeats>(() => readLocalHeartbeats());
+  const [pendingCheckIn, setPendingCheckIn] = useState<Omit<TimeCheckIn, "note" | "createdAt" | "skipped" | "inferred"> | null>(null);
   const [checkInDraft, setCheckInDraft] = useState("");
   const [goals, setGoals] = useState<Goal[]>([]);
   const [memorySummary, setMemorySummary] = useState("");
@@ -345,6 +360,7 @@ function App() {
     places,
     journal,
     checkIns,
+    deviceHeartbeats,
   });
   const voiceInputPrefix = useRef("");
   const lastVoiceTarget = useRef<VoiceTarget>("assistant");
@@ -388,8 +404,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    plannerSnapshot.current = { tasks, habits, schedule, birthdays, places, journal, checkIns };
-  }, [tasks, habits, schedule, birthdays, places, journal, checkIns]);
+    plannerSnapshot.current = { tasks, habits, schedule, birthdays, places, journal, checkIns, deviceHeartbeats };
+  }, [tasks, habits, schedule, birthdays, places, journal, checkIns, deviceHeartbeats]);
 
   async function connectCloudVault(legacyUserId?: string | null) {
     const ownerId = readSyncKey();
@@ -439,6 +455,7 @@ function App() {
       places: plannerSnapshot.current.places,
       journal: readJournal(),
       checkIns: readCheckIns(),
+      deviceHeartbeats: readLocalHeartbeats(),
       lastPlannerDay: readLastPlannerDay(),
     };
 
@@ -450,6 +467,8 @@ function App() {
       setSyncMessage(`Loaded cloud planner (updated ${new Date(planner.updatedAtMs || Date.now()).toLocaleString()}).`);
     }
     plannerHydrated.current = true;
+    // After hydrate, mark gaps since last multi-device activity as screen-free.
+    applyScreenFreeGaps();
   }
 
   function applyPlannerFromCloud(planner: PlannerCloudState) {
@@ -462,6 +481,7 @@ function App() {
     const nextPlaces = (planner.places as PlaceSettings) ?? initialPlaces;
     const nextJournal = planner.journal ?? {};
     const nextCheckIns = planner.checkIns ?? {};
+    const nextBeats = mergeHeartbeats(readLocalHeartbeats(), planner.deviceHeartbeats ?? {});
 
     setTasks(nextTasks);
     setHabits(nextHabits);
@@ -470,6 +490,7 @@ function App() {
     setPlaces(nextPlaces);
     setJournal(nextJournal);
     setCheckIns(nextCheckIns);
+    setDeviceHeartbeats(nextBeats);
     localStorage.setItem("daylight-tasks", JSON.stringify(nextTasks));
     localStorage.setItem("daylight-habits", JSON.stringify(nextHabits));
     localStorage.setItem("daylight-schedule-v2", JSON.stringify(nextSchedule));
@@ -477,6 +498,7 @@ function App() {
     localStorage.setItem("daylight-places", JSON.stringify(nextPlaces));
     writeJournal(nextJournal);
     writeCheckIns(nextCheckIns);
+    writeLocalHeartbeats(nextBeats);
     if (planner.lastPlannerDay) writeLastPlannerDay(planner.lastPlannerDay);
   }
 
@@ -493,6 +515,7 @@ function App() {
         places: snap.places,
         journal: readJournal(),
         checkIns: readCheckIns(),
+        deviceHeartbeats: readLocalHeartbeats(),
         lastPlannerDay: readLastPlannerDay(),
       })
         .then(() => setSyncMessage(`Synced ${new Date().toLocaleTimeString()}`))
@@ -507,10 +530,29 @@ function App() {
     queuePlannerSync();
   }
 
+  function persistHeartbeats(next: DeviceHeartbeats) {
+    setDeviceHeartbeats(next);
+    writeLocalHeartbeats(next);
+    plannerSnapshot.current = { ...plannerSnapshot.current, deviceHeartbeats: next };
+    queuePlannerSync();
+  }
+
+  function applyScreenFreeGaps() {
+    if (!readCheckInsEnabled()) return;
+    const beats = readLocalHeartbeats();
+    const lastActive = lastAnyDeviceActive(beats);
+    const before = readCheckIns();
+    const filled = fillScreenFreeGaps(before, lastActive, new Date());
+    if (JSON.stringify(filled) !== JSON.stringify(before)) {
+      persistCheckIns(filled);
+    }
+  }
+
   function savePendingCheckIn(note: string, skipped = false) {
     if (!pendingCheckIn) return;
     const entry: TimeCheckIn = {
       ...pendingCheckIn,
+      device: pendingCheckIn.device ?? deviceKind,
       note: note.trim(),
       skipped,
       createdAt: Date.now(),
@@ -532,6 +574,11 @@ function App() {
     if (!next) setPendingCheckIn(null);
   }
 
+  function changeDeviceKind(next: DeviceKind) {
+    setDeviceKind(next);
+    writeDeviceKind(next);
+  }
+
   useEffect(() => {
     if (!isFirebaseConfigured()) return;
     ensureUser()
@@ -548,7 +595,7 @@ function App() {
   const today = now;
   const planner = plannerDate(now);
   const dayKey = plannerDayKey(now);
-  const todaysCheckIns = dayCheckIns(checkIns, dayKey);
+  const todaysSlotRows = buildDaySlotRows(checkIns, dayKey, now);
 
   useEffect(() => {
     const existing = readBriefing(dayKey);
@@ -684,6 +731,7 @@ function App() {
         places: snap.places,
         journal: readJournal(),
         checkIns: readCheckIns(),
+        deviceHeartbeats: readLocalHeartbeats(),
         lastPlannerDay: readLastPlannerDay(),
       });
       setSyncMessage(`Forced upload ${new Date().toLocaleTimeString()}`);
@@ -697,14 +745,18 @@ function App() {
   useEffect(() => {
     if (!checkInsEnabled) return;
     const tick = () => {
-      if (Date.now() < readSnoozeUntil()) return;
       if (document.visibilityState === "hidden") return;
-      const pending = pendingCheckInSlot(readCheckIns(), new Date());
+      const device = readDeviceKind();
+      const beats = touchHeartbeat(mergeHeartbeats(readLocalHeartbeats(), deviceHeartbeats), device);
+      persistHeartbeats(beats);
+      applyScreenFreeGaps();
+      if (Date.now() < readSnoozeUntil()) return;
+      const pending = pendingCheckInSlot(readCheckIns(), device, new Date());
       if (!pending) return;
       setPendingCheckIn((current) => current?.id === pending.id ? current : pending);
     };
     tick();
-    const timer = window.setInterval(tick, 20_000);
+    const timer = window.setInterval(tick, 30_000);
     const onFocus = () => tick();
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
@@ -713,7 +765,7 @@ function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [checkInsEnabled, checkIns]);
+  }, [checkInsEnabled, deviceKind]);
 
   async function copySyncKey() {
     try {
@@ -1644,9 +1696,8 @@ function App() {
                 <div>
                   <h2>Time check-ins</h2>
                   <span>
-                    {checkInsEnabled
-                      ? "Every 30 minutes — what were you doing?"
-                      : "Paused in Settings"}
+                    Now {formatClock(now)} · this device: {DEVICE_LABELS[deviceKind]}
+                    {checkInsEnabled ? " · 30-min blocks" : " · paused"}
                   </span>
                 </div>
                 {checkInsEnabled && (
@@ -1654,7 +1705,7 @@ function App() {
                     type="button"
                     className="ghost-action"
                     onClick={() => {
-                      const pending = pendingCheckInSlot(checkIns, new Date());
+                      const pending = pendingCheckInSlot(checkIns, deviceKind, new Date());
                       if (pending) {
                         setPendingCheckIn(pending);
                         setCheckInDraft("");
@@ -1665,20 +1716,48 @@ function App() {
                   </button>
                 )}
               </div>
-              {todaysCheckIns.length ? (
-                <div className="checkin-timeline">
-                  {todaysCheckIns.map((entry) => (
-                    <article key={entry.id} className={entry.skipped ? "skipped" : ""}>
-                      <strong>{formatSlotRange(entry.slotStart, entry.slotEnd)}</strong>
-                      <p>{entry.skipped ? "Skipped" : (entry.note || "—")}</p>
-                    </article>
-                  ))}
+              {todaysSlotRows.length ? (
+                <div className="checkin-grid-wrap">
+                  <div className="checkin-grid-head">
+                    <span>Time</span>
+                    {DEVICES.map((device) => (
+                      <span key={device} className={device === deviceKind ? "current-device" : ""}>
+                        {DEVICE_LABELS[device]}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="checkin-grid">
+                    {todaysSlotRows.map((row) => {
+                      const anyDevice = DEVICES.some((device) => row.byDevice[device]);
+                      if (row.screenFree && !anyDevice) {
+                        return (
+                          <div className="checkin-row screen-free" key={row.slotStart}>
+                            <strong>{row.label}</strong>
+                            <p className="screen-free-note">Screen-free · no Daylight open on phone / laptop / iMac</p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="checkin-row" key={row.slotStart}>
+                          <strong>{row.label}</strong>
+                          {DEVICES.map((device) => {
+                            const entry = row.byDevice[device];
+                            return (
+                              <p key={device} className={!entry ? "muted" : entry.skipped ? "skipped" : ""}>
+                                {entry ? (entry.skipped ? "Skipped" : entry.note || "—") : "—"}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               ) : (
                 <p className="empty-note">
                   {checkInsEnabled
-                    ? "No blocks logged yet. When a half-hour ends, Daylight will ask what you did."
-                    : "Turn on 30-minute check-ins in Settings to build a day timeline."}
+                    ? "No blocks yet. Keep Daylight open to log this device; time with everything closed counts as screen-free."
+                    : "Turn on 30-minute check-ins in Settings."}
                 </p>
               )}
             </article>
@@ -2586,17 +2665,36 @@ function App() {
             <div className="workspace-heading">
               <div><h2>Settings</h2><p>Control how Daylight behaves on your desktop.</p></div>
             </div>
-            <div className="settings-list" style={{ marginBottom: 18 }}>
-              <button type="button" onClick={toggleCheckInsEnabled}>
+            <section className="places-settings">
+              <div className="settings-section-title">
+                <div>
+                  <strong>This device</strong>
+                  <small>Used for the 3-column time grid (Phone / Laptop / iMac). Pick what this machine is.</small>
+                </div>
+                <span>⌚</span>
+              </div>
+              <div className="device-kind-row">
+                {DEVICES.map((device) => (
+                  <button
+                    key={device}
+                    type="button"
+                    className={`device-kind-btn ${deviceKind === device ? "active" : ""}`}
+                    onClick={() => changeDeviceKind(device)}
+                  >
+                    {DEVICE_LABELS[device]}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="settings-inline-toggle" onClick={toggleCheckInsEnabled}>
                 <div>
                   <strong>30-minute check-ins</strong>
                   <small>
-                    When Daylight is open, ask what you did each half hour and sync the timeline to your vault.
+                    Prompt while Daylight is open. Time since the last session on any device is marked screen-free.
                   </small>
                 </div>
                 <span className={`switch ${checkInsEnabled ? "on" : ""}`}><i /></span>
               </button>
-            </div>
+            </section>
             <section className="places-settings sync-settings">
               <div className="settings-section-title">
                 <div>
@@ -2787,7 +2885,10 @@ function App() {
                 <h2>{formatSlotRange(pendingCheckIn.slotStart, pendingCheckIn.slotEnd)}</h2>
               </div>
             </header>
-            <p>What were you doing in that half hour? Be honest — this is just for you.</p>
+            <p>
+              What were you doing on your <strong>{DEVICE_LABELS[pendingCheckIn.device]}</strong> that half hour?
+              Time with no device open in Daylight is marked screen-free automatically.
+            </p>
             <label>
               <span>Quick note</span>
               <textarea

@@ -1476,35 +1476,126 @@ kbd {
   background: #f8faf7;
 }
 
-.checkin-timeline {
-  display: grid;
-  gap: 8px;
+.checkin-grid-wrap {
   margin-top: 12px;
+  overflow-x: auto;
 }
 
-.checkin-timeline article {
+.checkin-grid-head,
+.checkin-row {
   display: grid;
-  gap: 2px;
+  grid-template-columns: minmax(110px, 0.9fr) repeat(3, minmax(90px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+
+.checkin-grid-head {
+  padding: 0 4px 8px;
+  border-bottom: 1px solid #e3e8e1;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #7a8a82;
+}
+
+.checkin-grid-head .current-device {
+  color: #2f4a3c;
+}
+
+.checkin-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.checkin-row {
   padding: 10px 12px;
   border-radius: 10px;
   background: #fff;
   border: 1px solid #e3e8e1;
 }
 
-.checkin-timeline article.skipped {
-  opacity: 0.65;
+.checkin-row.screen-free {
+  grid-template-columns: minmax(110px, 0.9fr) 1fr;
+  background: #f3f6f3;
 }
 
-.checkin-timeline strong {
-  font-family: inherit;
+.checkin-row strong {
   font-size: 11px;
   color: #5f6f66;
 }
 
-.checkin-timeline p {
+.checkin-row p {
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: #2f3d36;
+  line-height: 1.35;
+}
+
+.checkin-row p.muted {
+  color: #a0aba4;
+}
+
+.checkin-row p.skipped {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.checkin-row .screen-free-note {
+  color: #6a7c72;
+  font-style: italic;
+}
+
+.device-kind-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 14px;
+}
+
+.device-kind-btn {
+  border: 1px solid #d5ddd6;
+  background: #fff;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4d5c54;
+  cursor: pointer;
+}
+
+.device-kind-btn.active {
+  background: #2f4a3c;
+  border-color: #2f4a3c;
+  color: #f4f8f5;
+}
+
+.settings-inline-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  border: 0;
+  border-top: 1px solid #e3e8e1;
+  padding: 14px 0 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-inline-toggle strong {
+  display: block;
+  font-size: 13px;
+}
+
+.settings-inline-toggle small {
+  display: block;
+  margin-top: 3px;
+  color: #6a7c72;
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .checkin-prompt textarea {
