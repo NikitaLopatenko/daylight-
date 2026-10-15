@@ -86,7 +86,7 @@ import {
   savePlannerState,
   type PlannerCloudState,
 } from "./lib/plannerSync";
-import { readSyncKey, writeSyncKey } from "./lib/syncKey";
+import { bootstrapSyncKeyFromUrl, readSyncKey, writeSyncKey } from "./lib/syncKey";
 import {
   buildDaySlotRows,
   DEVICE_LABELS,
@@ -309,7 +309,12 @@ function App() {
   const [cloudStatus, setCloudStatus] = useState(isFirebaseConfigured() ? "Connecting…" : "Local only");
   const [syncMessage, setSyncMessage] = useState("");
   const [syncKeyDraft, setSyncKeyDraft] = useState(() => {
-    try { return readSyncKey(); } catch { return ""; }
+    try {
+      bootstrapSyncKeyFromUrl();
+      return readSyncKey();
+    } catch {
+      return "";
+    }
   });
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
