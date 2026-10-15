@@ -87,6 +87,20 @@ import {
   type PlannerCloudState,
 } from "./lib/plannerSync";
 import { readSyncKey, writeSyncKey } from "./lib/syncKey";
+import {
+  dayCheckIns,
+  formatSlotRange,
+  pendingCheckInSlot,
+  readCheckIns,
+  readCheckInsEnabled,
+  readSnoozeUntil,
+  upsertCheckIn,
+  writeCheckIns,
+  writeCheckInsEnabled,
+  writeSnoozeUntil,
+  type CheckInLog,
+  type TimeCheckIn,
+} from "./lib/checkIns";
 import { startVoiceInput, type VoiceSession } from "./speech";
 import { VoiceMic } from "./VoiceMic";
 import "./App.css";
@@ -286,6 +300,10 @@ function App() {
   });
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [checkIns, setCheckIns] = useState<CheckInLog>(() => readCheckIns());
+  const [checkInsEnabled, setCheckInsEnabled] = useState(() => readCheckInsEnabled());
+  const [pendingCheckIn, setPendingCheckIn] = useState<Omit<TimeCheckIn, "note" | "createdAt" | "skipped"> | null>(null);
+  const [checkInDraft, setCheckInDraft] = useState("");
   const [goals, setGoals] = useState<Goal[]>([]);
   const [memorySummary, setMemorySummary] = useState("");
   const [lifeStory, setLifeStory] = useState("");
@@ -326,6 +344,7 @@ function App() {
     birthdays,
     places,
     journal,
+    checkIns,
   });
   const voiceInputPrefix = useRef("");
   const lastVoiceTarget = useRef<VoiceTarget>("assistant");
@@ -369,8 +388,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    plannerSnapshot.current = { tasks, habits, schedule, birthdays, places, journal };
-  }, [tasks, habits, schedule, birthdays, places, journal]);
+    plannerSnapshot.current = { tasks, habits, schedule, birthdays, places, journal, checkIns };
+  }, [tasks, habits, schedule, birthdays, places, journal, checkIns]);
 
   async function connectCloudVault(legacyUserId?: string | null) {
     const ownerId = readSyncKey();
@@ -419,6 +438,7 @@ function App() {
       birthdays: plannerSnapshot.current.birthdays,
       places: plannerSnapshot.current.places,
       journal: readJournal(),
+      checkIns: readCheckIns(),
       lastPlannerDay: readLastPlannerDay(),
     };
 
@@ -441,6 +461,7 @@ function App() {
     const nextBirthdays = (planner.birthdays as Birthday[]) ?? [];
     const nextPlaces = (planner.places as PlaceSettings) ?? initialPlaces;
     const nextJournal = planner.journal ?? {};
+    const nextCheckIns = planner.checkIns ?? {};
 
     setTasks(nextTasks);
     setHabits(nextHabits);
@@ -448,12 +469,14 @@ function App() {
     setBirthdays(nextBirthdays);
     setPlaces(nextPlaces);
     setJournal(nextJournal);
+    setCheckIns(nextCheckIns);
     localStorage.setItem("daylight-tasks", JSON.stringify(nextTasks));
     localStorage.setItem("daylight-habits", JSON.stringify(nextHabits));
     localStorage.setItem("daylight-schedule-v2", JSON.stringify(nextSchedule));
     localStorage.setItem("daylight-birthdays", JSON.stringify(nextBirthdays));
     localStorage.setItem("daylight-places", JSON.stringify(nextPlaces));
     writeJournal(nextJournal);
+    writeCheckIns(nextCheckIns);
     if (planner.lastPlannerDay) writeLastPlannerDay(planner.lastPlannerDay);
   }
 
@@ -469,11 +492,44 @@ function App() {
         birthdays: snap.birthdays,
         places: snap.places,
         journal: readJournal(),
+        checkIns: readCheckIns(),
         lastPlannerDay: readLastPlannerDay(),
       })
         .then(() => setSyncMessage(`Synced ${new Date().toLocaleTimeString()}`))
         .catch(() => setSyncMessage("Cloud sync failed — check Firestore rules."));
     }, 700);
+  }
+
+  function persistCheckIns(next: CheckInLog) {
+    setCheckIns(next);
+    writeCheckIns(next);
+    plannerSnapshot.current = { ...plannerSnapshot.current, checkIns: next };
+    queuePlannerSync();
+  }
+
+  function savePendingCheckIn(note: string, skipped = false) {
+    if (!pendingCheckIn) return;
+    const entry: TimeCheckIn = {
+      ...pendingCheckIn,
+      note: note.trim(),
+      skipped,
+      createdAt: Date.now(),
+    };
+    persistCheckIns(upsertCheckIn(checkIns, entry));
+    setPendingCheckIn(null);
+    setCheckInDraft("");
+  }
+
+  function snoozeCheckIn(minutes = 5) {
+    writeSnoozeUntil(Date.now() + minutes * 60_000);
+    setPendingCheckIn(null);
+  }
+
+  function toggleCheckInsEnabled() {
+    const next = !checkInsEnabled;
+    setCheckInsEnabled(next);
+    writeCheckInsEnabled(next);
+    if (!next) setPendingCheckIn(null);
   }
 
   useEffect(() => {
@@ -492,6 +548,7 @@ function App() {
   const today = now;
   const planner = plannerDate(now);
   const dayKey = plannerDayKey(now);
+  const todaysCheckIns = dayCheckIns(checkIns, dayKey);
 
   useEffect(() => {
     const existing = readBriefing(dayKey);
@@ -626,6 +683,7 @@ function App() {
         birthdays: snap.birthdays,
         places: snap.places,
         journal: readJournal(),
+        checkIns: readCheckIns(),
         lastPlannerDay: readLastPlannerDay(),
       });
       setSyncMessage(`Forced upload ${new Date().toLocaleTimeString()}`);
@@ -635,6 +693,27 @@ function App() {
       setAuthBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (!checkInsEnabled) return;
+    const tick = () => {
+      if (Date.now() < readSnoozeUntil()) return;
+      if (document.visibilityState === "hidden") return;
+      const pending = pendingCheckInSlot(readCheckIns(), new Date());
+      if (!pending) return;
+      setPendingCheckIn((current) => current?.id === pending.id ? current : pending);
+    };
+    tick();
+    const timer = window.setInterval(tick, 20_000);
+    const onFocus = () => tick();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [checkInsEnabled, checkIns]);
 
   async function copySyncKey() {
     try {
@@ -1559,6 +1638,51 @@ function App() {
                   || "Preferred path: Gemini app with your Pro subscription. Prompt is synced to Firebase whenever goals change."}
               </p>
             </article>
+
+            <article className="checkin-card">
+              <div className="section-heading">
+                <div>
+                  <h2>Time check-ins</h2>
+                  <span>
+                    {checkInsEnabled
+                      ? "Every 30 minutes — what were you doing?"
+                      : "Paused in Settings"}
+                  </span>
+                </div>
+                {checkInsEnabled && (
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    onClick={() => {
+                      const pending = pendingCheckInSlot(checkIns, new Date());
+                      if (pending) {
+                        setPendingCheckIn(pending);
+                        setCheckInDraft("");
+                      }
+                    }}
+                  >
+                    Log last half hour
+                  </button>
+                )}
+              </div>
+              {todaysCheckIns.length ? (
+                <div className="checkin-timeline">
+                  {todaysCheckIns.map((entry) => (
+                    <article key={entry.id} className={entry.skipped ? "skipped" : ""}>
+                      <strong>{formatSlotRange(entry.slotStart, entry.slotEnd)}</strong>
+                      <p>{entry.skipped ? "Skipped" : (entry.note || "—")}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-note">
+                  {checkInsEnabled
+                    ? "No blocks logged yet. When a half-hour ends, Daylight will ask what you did."
+                    : "Turn on 30-minute check-ins in Settings to build a day timeline."}
+                </p>
+              )}
+            </article>
+
             {suggestionVisible && (
             <article className="focus-card">
               <div className="focus-copy">
@@ -2462,6 +2586,17 @@ function App() {
             <div className="workspace-heading">
               <div><h2>Settings</h2><p>Control how Daylight behaves on your desktop.</p></div>
             </div>
+            <div className="settings-list" style={{ marginBottom: 18 }}>
+              <button type="button" onClick={toggleCheckInsEnabled}>
+                <div>
+                  <strong>30-minute check-ins</strong>
+                  <small>
+                    When Daylight is open, ask what you did each half hour and sync the timeline to your vault.
+                  </small>
+                </div>
+                <span className={`switch ${checkInsEnabled ? "on" : ""}`}><i /></span>
+              </button>
+            </div>
             <section className="places-settings sync-settings">
               <div className="settings-section-title">
                 <div>
@@ -2630,6 +2765,50 @@ function App() {
               <span>
                 <button type="button" className="secondary-action" onClick={() => setEditingLocation(null)}>Cancel</button>
                 <button className="primary-action">Save location</button>
+              </span>
+            </footer>
+          </form>
+        </div>
+      )}
+
+      {pendingCheckIn && checkInsEnabled && (
+        <div className="item-editor-backdrop checkin-backdrop">
+          <form
+            className="item-editor checkin-prompt"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (!checkInDraft.trim()) return;
+              savePendingCheckIn(checkInDraft, false);
+            }}
+          >
+            <header>
+              <div>
+                <small>30-MINUTE CHECK-IN</small>
+                <h2>{formatSlotRange(pendingCheckIn.slotStart, pendingCheckIn.slotEnd)}</h2>
+              </div>
+            </header>
+            <p>What were you doing in that half hour? Be honest — this is just for you.</p>
+            <label>
+              <span>Quick note</span>
+              <textarea
+                value={checkInDraft}
+                onChange={(event) => setCheckInDraft(event.target.value)}
+                placeholder="e.g. CIS 5650 homework, scrolling, table tennis, walked to class…"
+                rows={3}
+                autoFocus
+              />
+            </label>
+            <footer>
+              <button type="button" className="secondary-action" onClick={() => snoozeCheckIn(5)}>
+                Snooze 5 min
+              </button>
+              <span>
+                <button type="button" className="secondary-action" onClick={() => savePendingCheckIn("", true)}>
+                  Skip
+                </button>
+                <button className="primary-action" type="submit" disabled={!checkInDraft.trim()}>
+                  Save
+                </button>
               </span>
             </footer>
           </form>

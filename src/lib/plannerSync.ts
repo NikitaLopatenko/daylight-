@@ -6,6 +6,7 @@ import {
 } from "firebase/firestore";
 import type { Journal } from "../journal";
 import { getFirestoreDb } from "./firebase";
+import { normalizeCheckInLog, type CheckInLog } from "./checkIns";
 
 /** Generic planner blob synced across devices. */
 export type PlannerCloudState = {
@@ -15,6 +16,7 @@ export type PlannerCloudState = {
   birthdays: unknown[];
   places: unknown;
   journal: Journal;
+  checkIns: CheckInLog;
   lastPlannerDay: string | null;
   updatedAtMs: number;
 };
@@ -32,6 +34,7 @@ export async function loadPlannerState(ownerId: string): Promise<PlannerCloudSta
     birthdays: Array.isArray(data.birthdays) ? data.birthdays : [],
     places: data.places ?? { city: "Philadelphia, PA", places: [] },
     journal: (data.journal && typeof data.journal === "object") ? data.journal as Journal : {},
+    checkIns: normalizeCheckInLog(data.checkIns),
     lastPlannerDay: typeof data.lastPlannerDay === "string" ? data.lastPlannerDay : null,
     updatedAtMs: typeof data.updatedAtMs === "number" ? data.updatedAtMs : 0,
   };
@@ -61,5 +64,6 @@ export function plannerStateIsEmpty(state: PlannerCloudState | null) {
     || state.birthdays.length
     || placeList.length
     || Object.keys(state.journal ?? {}).length
+    || Object.keys(state.checkIns ?? {}).length
   );
 }

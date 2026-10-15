@@ -1468,6 +1468,71 @@ kbd {
   font-size: 8px;
 }
 
+.checkin-card {
+  margin-bottom: 14px;
+  padding: 16px;
+  border: 1px solid #dfe5dd;
+  border-radius: 13px;
+  background: #f8faf7;
+}
+
+.checkin-timeline {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.checkin-timeline article {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #e3e8e1;
+}
+
+.checkin-timeline article.skipped {
+  opacity: 0.65;
+}
+
+.checkin-timeline strong {
+  font-family: inherit;
+  font-size: 11px;
+  color: #5f6f66;
+}
+
+.checkin-timeline p {
+  margin: 0;
+  font-size: 13px;
+  color: #2f3d36;
+}
+
+.checkin-prompt textarea {
+  width: 100%;
+  min-height: 88px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid #dce2da;
+  border-radius: 10px;
+  resize: vertical;
+  font: inherit;
+  color: #39473f;
+  background: #fff;
+}
+
+.checkin-prompt footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.checkin-prompt footer > span {
+  display: flex;
+  gap: 8px;
+}
+
 .places-settings {
   margin-bottom: 18px;
   padding: 16px;
