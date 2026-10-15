@@ -600,7 +600,8 @@ function App() {
   const today = now;
   const planner = plannerDate(now);
   const dayKey = plannerDayKey(now);
-  const todaysSlotRows = buildDaySlotRows(checkIns, dayKey, now);
+  const historyDayKey = selectedDay || dayKey;
+  const historySlotRows = buildDaySlotRows(checkIns, historyDayKey, now);
 
   useEffect(() => {
     const existing = readBriefing(dayKey);
@@ -793,8 +794,15 @@ function App() {
     }
     writeLastPlannerDay(dayKey);
     queuePlannerSync();
-    if (!readJournal()[dayKey]?.sleepAsked) setSleepOpen(true);
   }, [dayKey]);
+
+  // Sleep prompt only after vault hydrate (phone was asking before cloud journal arrived).
+  useEffect(() => {
+    if (isFirebaseConfigured() && !plannerHydrated.current) return;
+    const day = journal[dayKey];
+    const asked = Boolean(day?.sleepAsked || (day?.sleepStart && day?.sleepEnd));
+    setSleepOpen(!asked);
+  }, [dayKey, journal, cloudUserId]);
 
   function addPlace(event: FormEvent) {
     event.preventDefault();
@@ -1696,77 +1704,6 @@ function App() {
               </p>
             </article>
 
-            <article className="checkin-card">
-              <div className="section-heading">
-                <div>
-                  <h2>Time check-ins</h2>
-                  <span>
-                    Now {formatClock(now)} · this device: {DEVICE_LABELS[deviceKind]}
-                    {checkInsEnabled ? " · 30-min blocks" : " · paused"}
-                  </span>
-                </div>
-                {checkInsEnabled && (
-                  <button
-                    type="button"
-                    className="ghost-action"
-                    onClick={() => {
-                      const pending = pendingCheckInSlot(checkIns, deviceKind, new Date());
-                      if (pending) {
-                        setPendingCheckIn(pending);
-                        setCheckInDraft("");
-                      }
-                    }}
-                  >
-                    Log last half hour
-                  </button>
-                )}
-              </div>
-              {todaysSlotRows.length ? (
-                <div className="checkin-grid-wrap">
-                  <div className="checkin-grid-head">
-                    <span>Time</span>
-                    {DEVICES.map((device) => (
-                      <span key={device} className={device === deviceKind ? "current-device" : ""}>
-                        {DEVICE_LABELS[device]}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="checkin-grid">
-                    {todaysSlotRows.map((row) => {
-                      const anyDevice = DEVICES.some((device) => row.byDevice[device]);
-                      if (row.screenFree && !anyDevice) {
-                        return (
-                          <div className="checkin-row screen-free" key={row.slotStart}>
-                            <strong>{row.label}</strong>
-                            <p className="screen-free-note">Screen-free · no Daylight open on phone / laptop / iMac</p>
-                          </div>
-                        );
-                      }
-                      return (
-                        <div className="checkin-row" key={row.slotStart}>
-                          <strong>{row.label}</strong>
-                          {DEVICES.map((device) => {
-                            const entry = row.byDevice[device];
-                            return (
-                              <p key={device} className={!entry ? "muted" : entry.skipped ? "skipped" : ""}>
-                                {entry ? (entry.skipped ? "Skipped" : entry.note || "—") : "—"}
-                              </p>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <p className="empty-note">
-                  {checkInsEnabled
-                    ? "No blocks yet. Keep Daylight open to log this device; time with everything closed counts as screen-free."
-                    : "Turn on 30-minute check-ins in Settings."}
-                </p>
-              )}
-            </article>
-
             {suggestionVisible && (
             <article className="focus-card">
               <div className="focus-copy">
@@ -2427,9 +2364,82 @@ function App() {
             <div className="workspace-heading">
               <div>
                 <h2>Day history</h2>
-                <p>Saved on this computer. The day changes at 8:00 AM, so late nights still belong to the previous day.</p>
+                <p>Heatmaps, sleep, and your Phone / Laptop / iMac time grid. Day rolls at 8:00 AM.</p>
               </div>
             </div>
+
+            <article className="checkin-card">
+              <div className="section-heading">
+                <div>
+                  <h2>Device time grid</h2>
+                  <span>
+                    {historyDayKey === dayKey ? "Today" : formatDayKey(historyDayKey)}
+                    {" · "}Now {formatClock(now)} · this device: {DEVICE_LABELS[deviceKind]}
+                    {checkInsEnabled ? " · 30-min blocks" : " · paused"}
+                  </span>
+                </div>
+                {checkInsEnabled && historyDayKey === dayKey && (
+                  <button
+                    type="button"
+                    className="ghost-action"
+                    onClick={() => {
+                      const pending = pendingCheckInSlot(checkIns, deviceKind, new Date());
+                      if (pending) {
+                        setPendingCheckIn(pending);
+                        setCheckInDraft("");
+                      }
+                    }}
+                  >
+                    Log last half hour
+                  </button>
+                )}
+              </div>
+              {historySlotRows.length ? (
+                <div className="checkin-grid-wrap">
+                  <div className="checkin-grid-head">
+                    <span>Time</span>
+                    {DEVICES.map((device) => (
+                      <span key={device} className={device === deviceKind ? "current-device" : ""}>
+                        {DEVICE_LABELS[device]}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="checkin-grid">
+                    {historySlotRows.map((row) => {
+                      const anyDevice = DEVICES.some((device) => row.byDevice[device]);
+                      if (row.screenFree && !anyDevice) {
+                        return (
+                          <div className="checkin-row screen-free" key={row.slotStart}>
+                            <strong>{row.label}</strong>
+                            <p className="screen-free-note">Screen-free · no Daylight open on phone / laptop / iMac</p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="checkin-row" key={row.slotStart}>
+                          <strong>{row.label}</strong>
+                          {DEVICES.map((device) => {
+                            const entry = row.byDevice[device];
+                            return (
+                              <p key={device} className={!entry ? "muted" : entry.skipped ? "skipped" : ""}>
+                                {entry ? (entry.skipped ? "Skipped" : entry.note || "—") : "—"}
+                              </p>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <p className="empty-note">
+                  {checkInsEnabled
+                    ? "No blocks for this day yet."
+                    : "Turn on 30-minute check-ins in Settings."}
+                </p>
+              )}
+            </article>
+
             {[
               ["habits", "Habits completed", "Each square is one day. Darker means more habits checked off."],
               ["sleep", "Sleep window", "Each square is hours slept. Click a day to see bedtime and wake time."],
