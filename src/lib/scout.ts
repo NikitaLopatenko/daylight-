@@ -1,6 +1,6 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { lifeStoryForPrompt } from "../data/lifeStory";
 import type { Goal } from "./firebase";
+import { openExternal } from "./openExternal";
 
 export type OpportunityKind = "opening" | "publication" | "event" | "signal" | "news" | "other";
 
@@ -282,11 +282,7 @@ export async function launchGeminiNewsScout(prompt: string) {
     throw new Error("Could not copy the prompt to the clipboard. Allow clipboard access and try again.");
   }
 
-  try {
-    await openUrl(GEMINI_APP_URL);
-  } catch {
-    window.open(GEMINI_APP_URL, "_blank", "noopener,noreferrer");
-  }
+  await openExternal(GEMINI_APP_URL);
 }
 
 async function askGeminiScout(prompt: string) {

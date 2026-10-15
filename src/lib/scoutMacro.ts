@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openExternal } from "./openExternal";
 import { GEMINI_APP_URL } from "./scout";
 
 export type ScreenPoint = { x: number; y: number };
@@ -95,11 +95,7 @@ export async function runGeminiScreenMacro(prompt: string, config: ScoutMacroCon
   await invoke("clipboard_write", { text: prompt });
 
   if (config.openGeminiFirst) {
-    try {
-      await openUrl(GEMINI_APP_URL);
-    } catch {
-      window.open(GEMINI_APP_URL, "_blank", "noopener,noreferrer");
-    }
+    await openExternal(GEMINI_APP_URL);
     await sleep(2500);
   }
 
