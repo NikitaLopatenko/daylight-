@@ -89,19 +89,24 @@ import {
 import { bootstrapSyncKeyFromUrl, readSyncKey, writeSyncKey } from "./lib/syncKey";
 import {
   buildDaySlotRows,
+  CHECK_IN_CATEGORIES,
   DEVICE_LABELS,
   DEVICES,
   fillScreenFreeGaps,
   formatClock,
   formatSlotRange,
   lastAnyDeviceActive,
+  mergeCheckInLogs,
   mergeHeartbeats,
   pendingCheckInSlot,
+  previousCompletedSlot,
   readCheckIns,
   readCheckInsEnabled,
   readDeviceKind,
   readLocalHeartbeats,
   readSnoozeUntil,
+  slotId,
+  slotKeyFromDate,
   touchHeartbeat,
   upsertCheckIn,
   writeCheckIns,
@@ -485,7 +490,7 @@ function App() {
     const nextBirthdays = (planner.birthdays as Birthday[]) ?? [];
     const nextPlaces = (planner.places as PlaceSettings) ?? initialPlaces;
     const nextJournal = planner.journal ?? {};
-    const nextCheckIns = planner.checkIns ?? {};
+    const nextCheckIns = mergeCheckInLogs(readCheckIns(), planner.checkIns ?? {});
     const nextBeats = mergeHeartbeats(readLocalHeartbeats(), planner.deviceHeartbeats ?? {});
 
     setTasks(nextTasks);
@@ -529,10 +534,34 @@ function App() {
   }
 
   function persistCheckIns(next: CheckInLog) {
-    setCheckIns(next);
-    writeCheckIns(next);
-    plannerSnapshot.current = { ...plannerSnapshot.current, checkIns: next };
+    // Merge with whatever is already on disk so a slow sync can't wipe another device.
+    const merged = mergeCheckInLogs(readCheckIns(), next);
+    setCheckIns(merged);
+    writeCheckIns(merged);
+    plannerSnapshot.current = { ...plannerSnapshot.current, checkIns: merged };
     queuePlannerSync();
+  }
+
+  function openLastHalfHourPrompt() {
+    const device = readDeviceKind();
+    const pending = pendingCheckInSlot(readCheckIns(), device, new Date());
+    if (pending) {
+      setPendingCheckIn(pending);
+      setCheckInDraft("");
+      return;
+    }
+    // Force a log UI for the previous slot even if already filled (lets you correct it).
+    const { start, end } = previousCompletedSlot(new Date());
+    const key = slotKeyFromDate(start);
+    setPendingCheckIn({
+      id: slotId(key, device),
+      dayKey: plannerDayKey(start),
+      slotKey: key,
+      slotStart: start.toISOString(),
+      slotEnd: end.toISOString(),
+      device,
+    });
+    setCheckInDraft("");
   }
 
   function persistHeartbeats(next: DeviceHeartbeats) {
@@ -560,11 +589,36 @@ function App() {
       device: pendingCheckIn.device ?? deviceKind,
       note: note.trim(),
       skipped,
+      inferred: false,
       createdAt: Date.now(),
     };
-    persistCheckIns(upsertCheckIn(checkIns, entry));
+    persistCheckIns(upsertCheckIn(readCheckIns(), entry));
     setPendingCheckIn(null);
     setCheckInDraft("");
+  }
+
+  async function pullSharedCheckIns() {
+    if (!cloudUserId || !plannerHydrated.current) return;
+    try {
+      const planner = await loadPlannerState(cloudUserId);
+      if (!planner) return;
+      const mergedLogs = mergeCheckInLogs(readCheckIns(), planner.checkIns ?? {});
+      const mergedBeats = mergeHeartbeats(readLocalHeartbeats(), planner.deviceHeartbeats ?? {});
+      const logsChanged = JSON.stringify(mergedLogs) !== JSON.stringify(readCheckIns());
+      const beatsChanged = JSON.stringify(mergedBeats) !== JSON.stringify(readLocalHeartbeats());
+      if (logsChanged) {
+        setCheckIns(mergedLogs);
+        writeCheckIns(mergedLogs);
+        plannerSnapshot.current = { ...plannerSnapshot.current, checkIns: mergedLogs };
+      }
+      if (beatsChanged) {
+        setDeviceHeartbeats(mergedBeats);
+        writeLocalHeartbeats(mergedBeats);
+        plannerSnapshot.current = { ...plannerSnapshot.current, deviceHeartbeats: mergedBeats };
+      }
+    } catch {
+      // offline / rules — ignore
+    }
   }
 
   function snoozeCheckIn(minutes = 5) {
@@ -752,14 +806,16 @@ function App() {
     if (!checkInsEnabled) return;
     const tick = () => {
       if (document.visibilityState === "hidden") return;
-      const device = readDeviceKind();
-      const beats = touchHeartbeat(mergeHeartbeats(readLocalHeartbeats(), deviceHeartbeats), device);
-      persistHeartbeats(beats);
-      applyScreenFreeGaps();
-      if (Date.now() < readSnoozeUntil()) return;
-      const pending = pendingCheckInSlot(readCheckIns(), device, new Date());
-      if (!pending) return;
-      setPendingCheckIn((current) => current?.id === pending.id ? current : pending);
+      void pullSharedCheckIns().then(() => {
+        const device = readDeviceKind();
+        const beats = touchHeartbeat(mergeHeartbeats(readLocalHeartbeats(), deviceHeartbeats), device);
+        persistHeartbeats(beats);
+        applyScreenFreeGaps();
+        if (Date.now() < readSnoozeUntil()) return;
+        const pending = pendingCheckInSlot(readCheckIns(), device, new Date());
+        if (!pending) return;
+        setPendingCheckIn((current) => current?.id === pending.id ? current : pending);
+      });
     };
     tick();
     const timer = window.setInterval(tick, 30_000);
@@ -771,7 +827,7 @@ function App() {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, [checkInsEnabled, deviceKind]);
+  }, [checkInsEnabled, deviceKind, cloudUserId]);
 
   async function copySyncKey() {
     try {
@@ -2381,14 +2437,8 @@ function App() {
                 {checkInsEnabled && historyDayKey === dayKey && (
                   <button
                     type="button"
-                    className="ghost-action"
-                    onClick={() => {
-                      const pending = pendingCheckInSlot(checkIns, deviceKind, new Date());
-                      if (pending) {
-                        setPendingCheckIn(pending);
-                        setCheckInDraft("");
-                      }
-                    }}
+                    className="primary-action"
+                    onClick={openLastHalfHourPrompt}
                   >
                     Log last half hour
                   </button>
@@ -2886,48 +2936,35 @@ function App() {
 
       {pendingCheckIn && checkInsEnabled && (
         <div className="item-editor-backdrop checkin-backdrop">
-          <form
-            className="item-editor checkin-prompt"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!checkInDraft.trim()) return;
-              savePendingCheckIn(checkInDraft, false);
-            }}
-          >
+          <div className="item-editor checkin-prompt">
             <header>
               <div>
-                <small>30-MINUTE CHECK-IN</small>
+                <small>30-MINUTE CHECK-IN · {DEVICE_LABELS[pendingCheckIn.device]}</small>
                 <h2>{formatSlotRange(pendingCheckIn.slotStart, pendingCheckIn.slotEnd)}</h2>
               </div>
             </header>
-            <p>
-              What were you doing on your <strong>{DEVICE_LABELS[pendingCheckIn.device]}</strong> that half hour?
-              Time with no device open in Daylight is marked screen-free automatically.
-            </p>
-            <label>
-              <span>Quick note</span>
-              <textarea
-                value={checkInDraft}
-                onChange={(event) => setCheckInDraft(event.target.value)}
-                placeholder="e.g. CIS 5650 homework, scrolling, table tennis, walked to class…"
-                rows={3}
-                autoFocus
-              />
-            </label>
+            <p>Tap what you were doing. No typing needed.</p>
+            <div className="checkin-categories">
+              {CHECK_IN_CATEGORIES.map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  className={`checkin-category-btn ${checkInDraft === category ? "active" : ""}`}
+                  onClick={() => savePendingCheckIn(category, false)}
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
             <footer>
               <button type="button" className="secondary-action" onClick={() => snoozeCheckIn(5)}>
                 Snooze 5 min
               </button>
-              <span>
-                <button type="button" className="secondary-action" onClick={() => savePendingCheckIn("", true)}>
-                  Skip
-                </button>
-                <button className="primary-action" type="submit" disabled={!checkInDraft.trim()}>
-                  Save
-                </button>
-              </span>
+              <button type="button" className="secondary-action" onClick={() => savePendingCheckIn("", true)}>
+                Skip
+              </button>
             </footer>
-          </form>
+          </div>
         </div>
       )}
 

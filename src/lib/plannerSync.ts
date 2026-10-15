@@ -7,6 +7,8 @@ import {
 import type { Journal } from "../journal";
 import { getFirestoreDb } from "./firebase";
 import {
+  mergeCheckInLogs,
+  mergeHeartbeats,
   normalizeCheckInLog,
   normalizeHeartbeats,
   type CheckInLog,
@@ -50,9 +52,16 @@ export async function loadPlannerState(ownerId: string): Promise<PlannerCloudSta
 export async function savePlannerState(ownerId: string, state: Omit<PlannerCloudState, "updatedAtMs">) {
   const db = getFirestoreDb();
   if (!db) return;
+  // Deep-merge check-ins / heartbeats with whatever is already in the cloud so
+  // one device can't wipe another device's half-hour logs (setDoc replaces maps).
+  const existing = await loadPlannerState(ownerId);
+  const checkIns = mergeCheckInLogs(existing?.checkIns ?? {}, state.checkIns ?? {});
+  const deviceHeartbeats = mergeHeartbeats(existing?.deviceHeartbeats ?? {}, state.deviceHeartbeats ?? {});
   const updatedAtMs = Date.now();
   await setDoc(doc(db, "owners", ownerId, "planner", "main"), {
     ...state,
+    checkIns,
+    deviceHeartbeats,
     updatedAtMs,
     updatedAt: serverTimestamp(),
   }, { merge: true });

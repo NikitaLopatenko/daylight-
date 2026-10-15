@@ -5,7 +5,9 @@ export type DeviceKind = "phone" | "laptop" | "imac";
 export type TimeCheckIn = {
   id: string;
   dayKey: string;
-  /** Slot start ISO */
+  /** Local slot key: YYYY-MM-DDTHH:mm */
+  slotKey: string;
+  /** Slot start ISO (display / legacy) */
   slotStart: string;
   /** Slot end ISO */
   slotEnd: string;
@@ -32,6 +34,24 @@ export const DEVICE_LABELS: Record<DeviceKind, string> = {
   laptop: "Laptop",
   imac: "iMac",
 };
+
+/** Tap options instead of typing. */
+export const CHECK_IN_CATEGORIES = [
+  "Homework / class",
+  "Research / coding",
+  "Social media",
+  "Gym / sports",
+  "Table tennis",
+  "Meals",
+  "Commute / walking",
+  "Entertainment",
+  "Chores / errands",
+  "Sleep / rest",
+  "Friends / social",
+  "Other",
+] as const;
+
+export type CheckInCategory = (typeof CHECK_IN_CATEGORIES)[number];
 
 export function readCheckInsEnabled() {
   try {
@@ -127,6 +147,10 @@ export function writeCheckIns(log: CheckInLog) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(log));
 }
 
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
 export function floorToSlot(date: Date) {
   const d = new Date(date);
   const minutes = d.getMinutes() < 30 ? 0 : 30;
@@ -142,9 +166,13 @@ export function previousCompletedSlot(now = new Date()) {
   return { start, end };
 }
 
-export function slotId(start: Date, device: DeviceKind | "free" = "free") {
-  const base = `${plannerDayKey(start)}-${String(start.getHours()).padStart(2, "0")}${String(start.getMinutes()).padStart(2, "0")}`;
-  return `${base}-${device}`;
+/** Stable local key so phone / Windows / Mac match the same half-hour. */
+export function slotKeyFromDate(start: Date) {
+  return `${plannerDayKey(start)}T${pad2(start.getHours())}:${pad2(start.getMinutes())}`;
+}
+
+export function slotId(slotKey: string, device: DeviceKind | "free" = "free") {
+  return `${slotKey}-${device}`;
 }
 
 export function formatSlotRange(startIso: string, endIso: string) {
@@ -164,32 +192,55 @@ export function formatClock(date = new Date()) {
 }
 
 export function upsertCheckIn(log: CheckInLog, entry: TimeCheckIn): CheckInLog {
-  const day = [...(log[entry.dayKey] ?? []).filter((item) => item.id !== entry.id), entry]
-    .sort((a, b) => a.slotStart.localeCompare(b.slotStart) || a.device.localeCompare(b.device));
+  const dayList = [...(log[entry.dayKey] ?? [])];
+  // Real device log replaces inferred screen-free for that slot.
+  const filtered = dayList.filter((item) => {
+    if (item.id === entry.id) return false;
+    if (!entry.inferred && item.inferred && item.slotKey === entry.slotKey) return false;
+    return true;
+  });
+  const day = [...filtered, entry]
+    .sort((a, b) => a.slotKey.localeCompare(b.slotKey) || a.device.localeCompare(b.device));
   return { ...log, [entry.dayKey]: day };
 }
 
-export function entriesForSlot(log: CheckInLog, dayKey: string, slotStartIso: string) {
-  return (log[dayKey] ?? []).filter((item) => item.slotStart === slotStartIso);
+/** Merge two logs by entry id (newer createdAt wins). Critical for multi-device sync. */
+export function mergeCheckInLogs(a: CheckInLog = {}, b: CheckInLog = {}): CheckInLog {
+  const out: CheckInLog = {};
+  const days = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const day of days) {
+    const map = new Map<string, TimeCheckIn>();
+    for (const entry of [...(a[day] ?? []), ...(b[day] ?? [])]) {
+      const prev = map.get(entry.id);
+      if (!prev || entry.createdAt >= prev.createdAt) map.set(entry.id, entry);
+    }
+    out[day] = [...map.values()].sort(
+      (x, y) => x.slotKey.localeCompare(y.slotKey) || x.device.localeCompare(y.device),
+    );
+  }
+  return out;
 }
 
-/** Prompt only for THIS device's most recent unanswered completed slot (not old catch-up spam). */
+export function entriesForSlotKey(log: CheckInLog, dayKey: string, slotKey: string) {
+  return (log[dayKey] ?? []).filter((item) => item.slotKey === slotKey);
+}
+
+/** Prompt for THIS device's previous completed half-hour if not logged yet. */
 export function pendingCheckInSlot(log: CheckInLog, device: DeviceKind, now = new Date()) {
   const { start, end } = previousCompletedSlot(now);
-  if (now.getTime() - end.getTime() < 60_000) return null;
+  // Small settle window so we don't fire on the exact boundary.
+  if (now.getTime() - end.getTime() < 15_000) return null;
 
-  const id = slotId(start, device);
+  const key = slotKeyFromDate(start);
+  const id = slotId(key, device);
   const dayKey = plannerDayKey(start);
   const existing = (log[dayKey] ?? []).find((item) => item.id === id);
-  if (existing) return null;
-
-  // If this slot is already marked screen-free globally, no device prompt.
-  const free = (log[dayKey] ?? []).find((item) => item.slotStart === start.toISOString() && item.inferred);
-  if (free) return null;
+  if (existing && !existing.inferred) return null;
 
   return {
     id,
     dayKey,
+    slotKey: key,
     slotStart: start.toISOString(),
     slotEnd: end.toISOString(),
     device,
@@ -197,17 +248,15 @@ export function pendingCheckInSlot(log: CheckInLog, device: DeviceKind, now = ne
 }
 
 /**
- * Fill completed slots since lastAnyActive with inferred screen-free rows
- * when no device logged anything for that slot.
+ * Fill older completed slots since lastAnyActive with inferred screen-free rows
+ * when no device logged anything for that slot. Skips the newest slot so the
+ * current device can still answer the prompt.
  */
 export function fillScreenFreeGaps(log: CheckInLog, lastActiveMs: number, now = new Date()): CheckInLog {
-  // Need a prior session marker; otherwise we'd invent a fake empty day on first launch.
   if (!lastActiveMs || lastActiveMs <= 0) return log;
 
   const { end: latestEnd } = previousCompletedSlot(now);
-
-  let cursorEnd = latestEnd;
-  // Cap lookback at 18h even if an old heartbeat exists.
+  let cursorEnd = new Date(latestEnd.getTime() - SLOT_MS); // skip newest completed slot
   const floorMs = Math.max(lastActiveMs, now.getTime() - 18 * 60 * 60 * 1000);
 
   let next = log;
@@ -216,21 +265,21 @@ export function fillScreenFreeGaps(log: CheckInLog, lastActiveMs: number, now = 
     guard += 1;
     const end = cursorEnd;
     const start = new Date(end.getTime() - SLOT_MS);
-    // Only auto-fill slots that ended after we last saw any device
     if (end.getTime() <= floorMs) break;
 
     const dayKey = plannerDayKey(start);
-    const slotStart = start.toISOString();
-    const existing = entriesForSlot(next, dayKey, slotStart);
+    const key = slotKeyFromDate(start);
+    const existing = entriesForSlotKey(next, dayKey, key);
     if (existing.length === 0) {
       const entry: TimeCheckIn = {
-        id: slotId(start, "free"),
+        id: slotId(key, "free"),
         dayKey,
-        slotStart,
+        slotKey: key,
+        slotStart: start.toISOString(),
         slotEnd: end.toISOString(),
         note: "Screen-free",
         createdAt: Date.now(),
-        device: "phone", // unused when inferred; display uses inferred flag
+        device: "phone",
         inferred: true,
       };
       next = upsertCheckIn(next, entry);
@@ -241,6 +290,7 @@ export function fillScreenFreeGaps(log: CheckInLog, lastActiveMs: number, now = 
 }
 
 export type SlotRow = {
+  slotKey: string;
   slotStart: string;
   slotEnd: string;
   label: string;
@@ -250,42 +300,50 @@ export type SlotRow = {
 
 export function buildDaySlotRows(log: CheckInLog, dayKey: string, now = new Date()): SlotRow[] {
   const entries = dayCheckIns(log, dayKey);
-  const starts = new Set<string>();
-  for (const entry of entries) starts.add(entry.slotStart);
+  const keys = new Set<string>();
+  for (const entry of entries) keys.add(entry.slotKey);
 
-  // Always include completed slots from day start (planner day 8am) through previous slot
   const [y, m, d] = dayKey.split("-").map(Number);
   let cursor = new Date(y, m - 1, d, 8, 0, 0, 0);
   const { end: latestEnd } = previousCompletedSlot(now);
-  const dayEndCap = plannerDayKey(latestEnd) === dayKey ? latestEnd : new Date(y, m - 1, d + 1, 8, 0, 0, 0);
+  const dayEndCap = plannerDayKey(latestEnd) === dayKey
+    ? latestEnd
+    : new Date(y, m - 1, d + 1, 8, 0, 0, 0);
 
   while (cursor < dayEndCap) {
-    starts.add(cursor.toISOString());
+    keys.add(slotKeyFromDate(cursor));
     cursor = new Date(cursor.getTime() + SLOT_MS);
   }
 
-  return [...starts]
+  return [...keys]
     .sort()
-    .map((slotStart) => {
-      const list = entriesForSlot(log, dayKey, slotStart);
+    .map((key) => {
+      const list = entriesForSlotKey(log, dayKey, key);
       const screenFree = list.find((item) => item.inferred);
       const byDevice: Partial<Record<DeviceKind, TimeCheckIn>> = {};
       for (const item of list) {
         if (item.inferred) continue;
         byDevice[item.device] = item;
       }
-      const slotEnd = list[0]?.slotEnd
-        ?? new Date(new Date(slotStart).getTime() + SLOT_MS).toISOString();
+      const start = list[0]
+        ? new Date(list[0].slotStart)
+        : (() => {
+          const [datePart, timePart] = key.split("T");
+          const [yy, mm, dd] = datePart.split("-").map(Number);
+          const [hh, mi] = timePart.split(":").map(Number);
+          return new Date(yy, mm - 1, dd, hh, mi, 0, 0);
+        })();
+      const end = list[0] ? new Date(list[0].slotEnd) : new Date(start.getTime() + SLOT_MS);
       return {
-        slotStart,
-        slotEnd,
-        label: formatSlotRange(slotStart, slotEnd),
+        slotKey: key,
+        slotStart: start.toISOString(),
+        slotEnd: end.toISOString(),
+        label: formatSlotRange(start.toISOString(), end.toISOString()),
         byDevice,
         screenFree,
       };
     })
     .filter((row) => {
-      // hide future empty trailing rows beyond "now" unless they have data
       if (new Date(row.slotEnd).getTime() > now.getTime() + 60_000) {
         return Boolean(row.screenFree || DEVICES.some((device) => row.byDevice[device]));
       }
@@ -294,7 +352,17 @@ export function buildDaySlotRows(log: CheckInLog, dayKey: string, now = new Date
 }
 
 export function dayCheckIns(log: CheckInLog, dayKey: string) {
-  return [...(log[dayKey] ?? [])].sort((a, b) => a.slotStart.localeCompare(b.slotStart));
+  return [...(log[dayKey] ?? [])].sort((a, b) => a.slotKey.localeCompare(b.slotKey));
+}
+
+function legacySlotKey(slotStartIso: string, dayKey: string) {
+  try {
+    const start = new Date(slotStartIso);
+    if (!Number.isNaN(start.getTime())) return slotKeyFromDate(start);
+  } catch {
+    // ignore
+  }
+  return `${dayKey}T00:00`;
 }
 
 export function normalizeCheckInLog(raw: unknown): CheckInLog {
@@ -309,15 +377,21 @@ export function normalizeCheckInLog(raw: unknown): CheckInLog {
         const device: DeviceKind = deviceRaw === "phone" || deviceRaw === "laptop" || deviceRaw === "imac"
           ? deviceRaw
           : "laptop";
+        const slotStart = String(item.slotStart ?? "");
+        const slotKey = String((item as TimeCheckIn).slotKey || legacySlotKey(slotStart, day));
+        const inferred = Boolean((item as TimeCheckIn).inferred);
+        // Canonical ids so phone / Windows / iMac merge the same row.
+        const id = inferred ? slotId(slotKey, "free") : slotId(slotKey, device);
         return {
-          id: String(item.id),
+          id,
           dayKey: String(item.dayKey ?? day),
-          slotStart: String(item.slotStart ?? ""),
+          slotKey,
+          slotStart,
           slotEnd: String(item.slotEnd ?? ""),
           note: String(item.note ?? ""),
           createdAt: typeof item.createdAt === "number" ? item.createdAt : Date.now(),
           skipped: Boolean(item.skipped),
-          inferred: Boolean((item as TimeCheckIn).inferred),
+          inferred,
           device,
         };
       })
