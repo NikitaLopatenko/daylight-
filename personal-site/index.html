@@ -43,12 +43,7 @@
     <main id="main">
       <section class="hero" id="top">
         <div class="hero-media" aria-hidden="true">
-          <img
-            src="/photos/hero-portrait.png"
-            alt=""
-            width="1600"
-            height="2000"
-          />
+          <img src="/photos/hero-portrait.png" alt="" width="1600" height="2000" />
           <div class="hero-shade"></div>
         </div>
         <div class="hero-inner">
@@ -83,7 +78,7 @@
               </p>
               <ul class="note-points">
                 <li>Cross-device vault sync</li>
-                <li>Voice input throughout</li>
+                <li>Voice input + 30-minute check-ins</li>
                 <li>Goals → morning briefing loop</li>
               </ul>
               <a class="text-link" href="https://github.com/NikitaLopatenko/daylight-" target="_blank" rel="noreferrer">
@@ -91,13 +86,14 @@
               </a>
             </div>
             <aside class="feature-aside" aria-label="Quick facts">
+              <figure class="feature-photo">
+                <img src="/photos/life/portrait-sky.jpg" alt="Nikita outdoors, volunteer backpack strap visible" width="720" height="900" loading="lazy" />
+              </figure>
               <p class="aside-label">Why it exists</p>
               <p>
                 I kept losing the thread between devices. Daylight is my answer: one quiet place for the day,
                 with check-ins that keep me honest about where the hours went.
               </p>
-              <p class="aside-label">Status</p>
-              <p>Personal daily driver · still iterating</p>
             </aside>
           </article>
         </div>
@@ -108,72 +104,101 @@
           <header class="band-head">
             <p class="kicker">From the notebook</p>
             <h2>Things I’ve shipped, hacked, or stayed up too late for</h2>
-            <p class="band-sub">
-              If something looks polished, it probably went through a few ugly drafts first.
-            </p>
+            <p class="band-sub">If something looks polished, it probably went through a few ugly drafts first.</p>
           </header>
 
-          <div class="notes-grid">
-            <article class="note-tile reveal">
-              <span class="kicker">Humanitarian · Swift</span>
-              <h3>Meal Lift</h3>
-              <p>Offline-first logistics for routing aid to Ukraine — adjacency-matrix routing on Firebase.</p>
-              <span class="tile-meta">Supported workflows moving 50+ tons / month</span>
-            </article>
+          <div class="story-grid">
+            <a
+              class="story big reveal"
+              href="https://github.com/NikitaLopatenko/N-Furcations"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <img src="/photos/work/furcation-3.jpg" alt="Generated vascular trifurcation mesh" width="1200" height="800" loading="lazy" />
+              <div class="story-body">
+                <span class="kicker">Research · SimVascular</span>
+                <h3>N-Furcations</h3>
+                <p>
+                  Automated pipeline for 1-to-3 / 1-to-4 / 1-to-5 vascular junctions — geometry, meshing, and CFD setup
+                  for ML / PINN datasets. Built on top of SimVascular.
+                </p>
+                <span class="tile-meta">GitHub · velocity GIF in repo</span>
+              </div>
+            </a>
 
             <a
-              class="note-tile reveal"
+              class="story reveal"
               href="https://github.com/NikitaLopatenko/CAD-view"
               target="_blank"
               rel="noreferrer"
             >
-              <span class="kicker">Hackathon · CAD</span>
-              <h3>CAD-View</h3>
-              <p>
-                Photo / mesh → editable SolidWorks-style feature trees. Top 10 at VoltHacks 2026 with Aditya —
-                we learned CAD guts the hard way.
-              </p>
-              <span class="tile-meta">GitHub + Devpost</span>
+              <img src="/photos/work/cadview-overlay.png" alt="CAD-View mesh versus recovered CAD overlay" width="900" height="700" loading="lazy" />
+              <div class="story-body">
+                <span class="kicker">Hackathon · CAD</span>
+                <h3>CAD-View</h3>
+                <p>
+                  Photos / meshes → editable SolidWorks-style feature trees. Top 10 at VoltHacks 2026 with Aditya —
+                  nasal-spray demo with ~1.8% volume error on the recovered revolve.
+                </p>
+                <span class="tile-meta">GitHub ↗</span>
+              </div>
             </a>
 
-            <article class="note-tile reveal">
-              <span class="kicker">NVIDIA · 1st place</span>
-              <h3>Breath of Fresh Air</h3>
-              <p>
-                Air-quality modeling hackathon. Somehow landed 1st place with an R² of about 0.87 —
-                mostly panic, coffee, and “does this even compile?”
-              </p>
-              <span class="tile-meta">Hackathon win</span>
+            <a class="story reveal" href="https://www.meallift.org/" target="_blank" rel="noreferrer">
+              <img src="/photos/work/meallift-icon.png" alt="Meal Lift logo" width="800" height="800" loading="lazy" />
+              <div class="story-body">
+                <span class="kicker">Humanitarian · Swift</span>
+                <h3>Meal Lift</h3>
+                <p>
+                  Offline-first logistics for matching surplus with need — algorithmic routing for food redistribution
+                  and aid delivery. Built because the problem was real.
+                </p>
+                <span class="tile-meta">meallift.org ↗</span>
+              </div>
+            </a>
+
+            <a
+              class="story reveal"
+              href="https://rai.utah.edu/air-quality-hackathon-recap/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              <img src="/photos/work/fireball-award.jpg" alt="Team Fireball at the Breath of Fresh Air hackathon awards" width="900" height="700" loading="lazy" />
+              <div class="story-body">
+                <span class="kicker">NVIDIA’s Choice · Utah RAI</span>
+                <h3>Team Fireball</h3>
+                <p>
+                  Cost-efficient PM2.5 forecasting without heavy chemical transport models. NVIDIA’s Choice Award
+                  (GeForce RTX 4090) at the Breath of Fresh Air AI Hackathon — with Yuvraj, Venkataditya, Byron, and Maksym.
+                </p>
+                <span class="tile-meta">Official recap ↗</span>
+              </div>
+            </a>
+
+            <article class="story reveal">
+              <img src="/photos/work/velocity.gif" alt="Transient CFD velocity propagation through a trifurcation" width="900" height="700" loading="lazy" />
+              <div class="story-body">
+                <span class="kicker">Research · In progress</span>
+                <h3>Coronary hemodynamics</h3>
+                <p>
+                  With Amir Arzani at Utah: collateral arteries, stenosis, SimVascular, HPC, and ML surrogates.
+                  Aiming for APS DFD 2026 — preprint still cooking.
+                </p>
+                <span class="tile-meta">Lots of plots that almost look right</span>
+              </div>
             </article>
 
-            <article class="note-tile reveal">
-              <span class="kicker">COMAP MCM · Math modeling</span>
-              <h3>Bridge transit model</h3>
-              <p>
-                Francis Scott Key Bridge transit modeling with a graph + neural-ODE approach (DMST-GNODE).
-                U.S. rank 3 / 17 in our category.
-              </p>
-              <span class="tile-meta">Late nights + differential equations</span>
-            </article>
-
-            <article class="note-tile reveal">
-              <span class="kicker">Research · In progress</span>
-              <h3>Coronary hemodynamics</h3>
-              <p>
-                With Amir Arzani at Utah: how collateral arteries change flow around stenosis —
-                SimVascular, HPC, ML surrogates. Aiming for APS DFD 2026; preprint still cooking.
-              </p>
-              <span class="tile-meta">Lots of plots that almost look right</span>
-            </article>
-
-            <article class="note-tile reveal">
-              <span class="kicker">GPU · Coursework</span>
-              <h3>CUDA path tracer</h3>
-              <p>
-                Penn’s GPU Programming course (CIS 5650) — learning to think in warps and memory
-                when every millisecond matters (and when my first kernels… didn’t).
-              </p>
-              <span class="tile-meta">Still leveling up</span>
+            <article class="story reveal">
+              <img src="/photos/work/fireball-work.jpg" alt="Hackathon team working at SCI Institute" width="900" height="700" loading="lazy" />
+              <div class="story-body">
+                <span class="kicker">COMAP MCM · Math modeling</span>
+                <h3>Bridge transit model</h3>
+                <p>
+                  Francis Scott Key Bridge transit modeling with a graph + neural-ODE approach (DMST-GNODE).
+                  U.S. rank 3 / 17 in our category.
+                </p>
+                <span class="tile-meta">Late nights + differential equations</span>
+              </div>
             </article>
           </div>
         </div>
@@ -187,28 +212,59 @@
           </header>
 
           <article class="life-feature reveal">
-            <p class="kicker accent">Table tennis</p>
-            <h3>We restarted the Utah club together</h3>
-            <div class="life-copy">
-              <p>
-                The university club had gone quiet for years. Me and my friends decided to bring it back —
-                refiled the paperwork, tracked down students who’d played about ten years earlier, begged for
-                facility time, and slowly rebuilt the culture from zero. I was president for a while, but it was never a solo act:
-                officers, coaches, volunteers, and regulars did the real heavy lifting.
-              </p>
-              <p>
-                Along the way we taught <em>ESSF 1119 Table Tennis</em>, grew to <strong>150+</strong> members,
-                traveled to compete, hosted warm-up opens with <strong>100+</strong> players, and raised a bit of money for gear.
-                I’m away at Penn now — the new officer team is carrying it forward and they’re awesome.
-              </p>
-              <p>
-                Peek anytime:
-                <a class="text-link" href="https://www.instagram.com/uofutabletennis/" target="_blank" rel="noreferrer">
-                  @uofutabletennis ↗
-                </a>
-              </p>
+            <div class="life-feature-grid">
+              <div class="life-copy">
+                <p class="kicker accent">Table tennis</p>
+                <h3>We restarted the Utah club together</h3>
+                <p>
+                  The university club had gone quiet for years. Me and my friends decided to bring it back —
+                  refiled the paperwork, tracked down students who’d played about ten years earlier, begged for
+                  facility time, and slowly rebuilt the culture from zero. I was president for a while, but it was never a solo act.
+                </p>
+                <p>
+                  We taught <em>ESSF 1119 Table Tennis</em>, grew to <strong>150+</strong> members, traveled to compete,
+                  hosted warm-up opens with <strong>100+</strong> players, and raised a bit of money for gear.
+                  First place at Weber State Spring Invitational 2026. I’m at Penn now — the new officer team is carrying it forward.
+                </p>
+                <p>
+                  Peek anytime:
+                  <a class="text-link" href="https://www.instagram.com/uofutabletennis/" target="_blank" rel="noreferrer">
+                    @uofutabletennis ↗
+                  </a>
+                </p>
+              </div>
+              <figure class="life-hero-photo">
+                <img src="/photos/life/tt-serve.jpg" alt="Nikita serving in a table tennis match" width="900" height="1200" loading="lazy" />
+              </figure>
             </div>
           </article>
+
+          <div class="photo-mosaic reveal">
+            <figure>
+              <img src="/photos/life/tt-team.jpg" alt="Utah table tennis team in matching jerseys" width="800" height="1000" loading="lazy" />
+              <figcaption>Team kits · Utah</figcaption>
+            </figure>
+            <figure>
+              <img src="/photos/life/tt-club.jpg" alt="Club photo behind a JOOLA table" width="800" height="1000" loading="lazy" />
+              <figcaption>Club nights</figcaption>
+            </figure>
+            <figure>
+              <img src="/photos/life/tt-medal.jpg" alt="Holding a first-place Weber State table tennis medal" width="800" height="1000" loading="lazy" />
+              <figcaption>Weber State · 1st</figcaption>
+            </figure>
+            <figure>
+              <img src="/photos/life/hiking-overlook.jpg" alt="Hiking overlook above the Salt Lake valley" width="800" height="1000" loading="lazy" />
+              <figcaption>Wasatch weekends</figcaption>
+            </figure>
+            <figure>
+              <img src="/photos/life/friends-waterfall.jpg" alt="Friends at a waterfall on a hike" width="800" height="1000" loading="lazy" />
+              <figcaption>With friends</figcaption>
+            </figure>
+            <figure>
+              <img src="/photos/life/tt-stance.jpg" alt="Ready stance at the table tennis table" width="800" height="1000" loading="lazy" />
+              <figcaption>Ready stance</figcaption>
+            </figure>
+          </div>
 
           <div class="life-pair">
             <article class="life-blurb reveal">
@@ -240,6 +296,9 @@
           </header>
 
           <div class="about-body reveal">
+            <figure class="about-photo">
+              <img src="/photos/life/hiking-overlook.jpg" alt="Nikita on a hiking overlook" width="720" height="900" loading="lazy" />
+            </figure>
             <p>
               I grew up in Ukraine, finished undergrad at the University of Utah, and I’m now a master’s freshman
               in scientific computing at Penn. I care about problems where math meets something physical —
@@ -277,6 +336,7 @@
               <p class="rail-links">
                 <a href="https://linkedin.com/in/nikitalopatenko" target="_blank" rel="noreferrer">LinkedIn</a>
                 <a href="https://github.com/NikitaLopatenko" target="_blank" rel="noreferrer">GitHub</a>
+                <a href="https://www.meallift.org/" target="_blank" rel="noreferrer">Meal Lift</a>
               </p>
             </div>
           </aside>
