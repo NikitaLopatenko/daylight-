@@ -119,6 +119,10 @@ import {
   type DeviceKind,
   type TimeCheckIn,
 } from "./lib/checkIns";
+import {
+  alertPendingCheckIn,
+  ensureCheckInNotificationPermission,
+} from "./lib/checkInAlerts";
 import { startVoiceInput, type VoiceSession } from "./speech";
 import { VoiceMic } from "./VoiceMic";
 import "./App.css";
@@ -630,7 +634,11 @@ function App() {
     const next = !checkInsEnabled;
     setCheckInsEnabled(next);
     writeCheckInsEnabled(next);
-    if (!next) setPendingCheckIn(null);
+    if (!next) {
+      setPendingCheckIn(null);
+      return;
+    }
+    void ensureCheckInNotificationPermission();
   }
 
   function changeDeviceKind(next: DeviceKind) {
@@ -804,21 +812,31 @@ function App() {
 
   useEffect(() => {
     if (!checkInsEnabled) return;
+    void ensureCheckInNotificationPermission();
+
     const tick = () => {
-      if (document.visibilityState === "hidden") return;
+      const visible = document.visibilityState !== "hidden";
       void pullSharedCheckIns().then(() => {
         const device = readDeviceKind();
-        const beats = touchHeartbeat(mergeHeartbeats(readLocalHeartbeats(), deviceHeartbeats), device);
-        persistHeartbeats(beats);
-        applyScreenFreeGaps();
+        // Heartbeats only while Daylight is actually in use (visible / focused).
+        if (visible) {
+          const beats = touchHeartbeat(mergeHeartbeats(readLocalHeartbeats(), deviceHeartbeats), device);
+          persistHeartbeats(beats);
+          applyScreenFreeGaps();
+        }
         if (Date.now() < readSnoozeUntil()) return;
         const pending = pendingCheckInSlot(readCheckIns(), device, new Date());
         if (!pending) return;
-        setPendingCheckIn((current) => current?.id === pending.id ? current : pending);
+        setPendingCheckIn((current) => (current?.id === pending.id ? current : pending));
+        void alertPendingCheckIn({
+          id: pending.id,
+          rangeLabel: formatSlotRange(pending.slotStart, pending.slotEnd),
+          deviceLabel: DEVICE_LABELS[pending.device],
+        });
       });
     };
     tick();
-    const timer = window.setInterval(tick, 30_000);
+    const timer = window.setInterval(tick, 20_000);
     const onFocus = () => tick();
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
@@ -2754,10 +2772,19 @@ function App() {
                 <div>
                   <strong>30-minute check-ins</strong>
                   <small>
-                    Prompt while Daylight is open. Time since the last session on any device is marked screen-free.
+                    Every half hour: OS notification + Daylight jumps to the front so you can tap a category.
+                    Allow notifications when asked. On phone, keep the Home Screen app running in the background.
                   </small>
                 </div>
                 <span className={`switch ${checkInsEnabled ? "on" : ""}`}><i /></span>
+              </button>
+              <button
+                type="button"
+                className="secondary-action"
+                style={{ marginTop: 10 }}
+                onClick={() => void ensureCheckInNotificationPermission()}
+              >
+                Allow check-in notifications
               </button>
             </section>
             <section className="places-settings sync-settings">

@@ -11,10 +11,10 @@
     "install-desktop": "tauri build",
     "deploy:web": "npm run build && npx firebase-tools deploy --only hosting --project daylight-fc0c2"
   },
-
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2",
+    "@tauri-apps/plugin-notification": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "firebase": "^12.19.0",
     "react": "^19.1.0",
