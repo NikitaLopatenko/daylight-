@@ -2462,7 +2462,7 @@ function App() {
                   <button
                     type="button"
                     className="primary-action"
-                    onClick={openLastHalfHourPrompt}
+                    onClick={() => openLastHalfHourPrompt()}
                   >
                     Log last half hour
                   </button>
