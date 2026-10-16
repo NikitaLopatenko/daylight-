@@ -380,9 +380,11 @@ img {
 
 .feature-photo img {
   width: 100%;
+  height: auto;
   aspect-ratio: 4 / 5;
   object-fit: cover;
-  object-position: center 20%;
+  object-position: center center;
+  display: block;
 }
 
 .aside-label {
@@ -439,9 +441,11 @@ a.story:focus-visible {
 
 .story > img {
   width: 100%;
-  aspect-ratio: 16 / 11;
+  aspect-ratio: 16 / 10;
   object-fit: cover;
+  object-position: center center;
   background: var(--paper-deep);
+  display: block;
 }
 
 .story-body {
@@ -510,47 +514,50 @@ a.story:focus-visible {
   overflow: hidden;
   border-radius: 4px;
   border: 1px solid var(--line);
+  background: var(--paper-deep);
 }
 
 .life-hero-photo img {
   width: 100%;
-  aspect-ratio: 3 / 4;
+  height: auto;
+  aspect-ratio: 4 / 5;
   object-fit: cover;
-  object-position: center 15%;
+  object-position: center center;
+  display: block;
 }
 
-.photo-mosaic {
+/* Gates-style: fewer, wider frames — no caption clutter */
+.life-gallery {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  margin-top: 32px;
+  margin-top: 36px;
 }
 
-.photo-mosaic figure {
+.life-shot {
   margin: 0;
   overflow: hidden;
   border-radius: 4px;
   border: 1px solid var(--line);
-  background: var(--white);
+  background: var(--paper-deep);
 }
 
-.photo-mosaic img {
+.life-shot img {
   width: 100%;
-  aspect-ratio: 4 / 5;
+  height: auto;
+  aspect-ratio: 3 / 2;
   object-fit: cover;
-  transition: transform 0.45s ease;
+  object-position: center center;
+  display: block;
 }
 
-.photo-mosaic figure:hover img {
-  transform: scale(1.03);
+.life-shot.lead img {
+  aspect-ratio: 21 / 10;
 }
 
-.photo-mosaic figcaption {
-  padding: 10px 12px 12px;
-  font-family: var(--sans);
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: var(--ink-soft);
+.life-shot-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
 }
 
 .life-pair {
@@ -594,9 +601,11 @@ a.story:focus-visible {
 
 .about-photo img {
   width: 100%;
+  height: auto;
   aspect-ratio: 4 / 5;
   object-fit: cover;
-  object-position: center 20%;
+  object-position: center center;
+  display: block;
 }
 
 .about-body p {
@@ -737,8 +746,12 @@ a.story:focus-visible {
     grid-template-columns: 1fr 1fr;
   }
 
-  .photo-mosaic {
-    grid-template-columns: 1fr 1fr;
+  .life-shot-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .life-shot.lead img {
+    aspect-ratio: 16 / 10;
   }
 
   .hero-inner {
@@ -779,8 +792,7 @@ a.story:focus-visible {
     margin-right: 18px;
   }
 
-  .story-grid,
-  .photo-mosaic {
+  .story-grid {
     grid-template-columns: 1fr;
   }
 
