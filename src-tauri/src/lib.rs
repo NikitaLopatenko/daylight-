@@ -1,4 +1,5 @@
 mod input_macro;
+mod window_raise;
 
 use tauri::{
     menu::{Menu, MenuItem},
@@ -23,6 +24,7 @@ pub fn run() {
             input_macro::clipboard_write,
             input_macro::clipboard_read,
             input_macro::sleep_ms,
+            window_raise::force_raise_main_window,
         ])
         .setup(|app| {
             // Register Daylight for Windows startup so it opens after login.
@@ -46,8 +48,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            window_raise::raise_window(&window);
                         }
                     }
                     "quit" => app.exit(0),
@@ -61,8 +62,7 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                            window_raise::raise_window(&window);
                         }
                     }
                 })

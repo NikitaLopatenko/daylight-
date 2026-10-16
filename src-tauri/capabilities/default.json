@@ -9,11 +9,13 @@
     "core:window:allow-unminimize",
     "core:window:allow-set-focus",
     "core:window:allow-set-always-on-top",
+    "core:window:allow-request-user-attention",
     "autostart:allow-disable",
     "autostart:allow-enable",
     "autostart:allow-is-enabled",
     "notification:default",
     "opener:default",
-    "allow-scout-macro"
+    "allow-scout-macro",
+    "allow-window-raise"
   ]
 }

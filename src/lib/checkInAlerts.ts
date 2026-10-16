@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted as isTauriPermissionGranted,
@@ -83,11 +84,27 @@ async function showOsNotification(title: string, body: string) {
   }
 }
 
-/** Bring Daylight to the front (desktop) so the category picker is usable. */
+/**
+ * Bring the Daylight *app window* above other apps/tabs — not just show a modal inside Daylight.
+ * Desktop (Tauri) uses a native raise. Browser/PWA can only try focus + notification.
+ */
 export async function bringDaylightForward() {
-  if (!isTauriRuntime()) {
+  if (isTauriRuntime()) {
     try {
-      window.focus();
+      await invoke("force_raise_main_window");
+      return;
+    } catch {
+      // fall back to JS window APIs
+    }
+    try {
+      const win = getCurrentWindow();
+      await win.unminimize();
+      await win.show();
+      await win.setFocus();
+      await win.setAlwaysOnTop(true);
+      window.setTimeout(() => {
+        void win.setAlwaysOnTop(false);
+      }, 20_000);
     } catch {
       // ignore
     }
@@ -95,21 +112,14 @@ export async function bringDaylightForward() {
   }
 
   try {
-    const win = getCurrentWindow();
-    await win.unminimize();
-    await win.show();
-    await win.setFocus();
-    await win.setAlwaysOnTop(true);
-    window.setTimeout(() => {
-      void win.setAlwaysOnTop(false);
-    }, 12_000);
+    window.focus();
   } catch {
     // ignore
   }
 }
 
 /**
- * Pop the check-in UI forward + OS notification.
+ * Pop the OS window forward + notification + in-app category picker.
  * Cooldown avoids spamming the same half-hour slot every poll tick.
  */
 export async function alertPendingCheckIn(opts: {
@@ -125,6 +135,7 @@ export async function alertPendingCheckIn(opts: {
   }
   writeLastAlert(opts.id, now);
 
+  // Raise the whole app first, then notify.
   await bringDaylightForward();
   await showOsNotification(
     "Daylight · 30-minute check-in",

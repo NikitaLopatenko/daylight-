@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-window-raise"
+description = "Force Daylight's main window above other apps for check-in prompts"
+commands.allow = ["force_raise_main_window"]

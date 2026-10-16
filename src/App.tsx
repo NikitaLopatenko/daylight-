@@ -121,6 +121,7 @@ import {
 } from "./lib/checkIns";
 import {
   alertPendingCheckIn,
+  bringDaylightForward,
   ensureCheckInNotificationPermission,
 } from "./lib/checkInAlerts";
 import { startVoiceInput, type VoiceSession } from "./speech";
@@ -546,26 +547,31 @@ function App() {
     queuePlannerSync();
   }
 
-  function openLastHalfHourPrompt() {
+  function openLastHalfHourPrompt(opts?: { raiseWindow?: boolean }) {
     const device = readDeviceKind();
     const pending = pendingCheckInSlot(readCheckIns(), device, new Date());
-    if (pending) {
-      setPendingCheckIn(pending);
-      setCheckInDraft("");
-      return;
-    }
-    // Force a log UI for the previous slot even if already filled (lets you correct it).
-    const { start, end } = previousCompletedSlot(new Date());
-    const key = slotKeyFromDate(start);
-    setPendingCheckIn({
-      id: slotId(key, device),
-      dayKey: plannerDayKey(start),
-      slotKey: key,
-      slotStart: start.toISOString(),
-      slotEnd: end.toISOString(),
-      device,
-    });
+    const slot = pending ?? (() => {
+      const { start, end } = previousCompletedSlot(new Date());
+      const key = slotKeyFromDate(start);
+      return {
+        id: slotId(key, device),
+        dayKey: plannerDayKey(start),
+        slotKey: key,
+        slotStart: start.toISOString(),
+        slotEnd: end.toISOString(),
+        device,
+      };
+    })();
+    setPendingCheckIn(slot);
     setCheckInDraft("");
+    if (opts?.raiseWindow) {
+      void alertPendingCheckIn({
+        id: slot.id,
+        rangeLabel: formatSlotRange(slot.slotStart, slot.slotEnd),
+        deviceLabel: DEVICE_LABELS[slot.device],
+        force: true,
+      });
+    }
   }
 
   function persistHeartbeats(next: DeviceHeartbeats) {
@@ -2778,14 +2784,32 @@ function App() {
                 </div>
                 <span className={`switch ${checkInsEnabled ? "on" : ""}`}><i /></span>
               </button>
-              <button
-                type="button"
-                className="secondary-action"
-                style={{ marginTop: 10 }}
-                onClick={() => void ensureCheckInNotificationPermission()}
-              >
-                Allow check-in notifications
-              </button>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => void ensureCheckInNotificationPermission()}
+                >
+                  Allow check-in notifications
+                </button>
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => {
+                    void (async () => {
+                      await ensureCheckInNotificationPermission();
+                      await bringDaylightForward();
+                      openLastHalfHourPrompt({ raiseWindow: true });
+                    })();
+                  }}
+                >
+                  Test: bring Daylight to front
+                </button>
+              </div>
+              <p style={{ margin: "8px 0 0", fontSize: 11, color: "#6a7c72", lineHeight: 1.4 }}>
+                Desktop app only: the whole Daylight window should jump above Chrome/other apps for ~20s.
+                Restart with <code>npm run tauri dev</code> after updating. Browser tabs cannot steal focus.
+              </p>
             </section>
             <section className="places-settings sync-settings">
               <div className="settings-section-title">
